@@ -3,10 +3,10 @@ services:
     build: .
     image: domain-scanner:latest
     restart: unless-stopped
-    # Bound to localhost: nginx terminates TLS and proxies in. Change to
-    # "8000:8000" only if you are deliberately exposing it without a proxy.
+    # Bound to localhost: nginx terminates TLS and proxies in. Set SCANNER_PORT
+    # in .env if 8000 is already taken by something else on this host.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${SCANNER_PORT:-8000}:8000"
     env_file:
       - .env
     volumes:
