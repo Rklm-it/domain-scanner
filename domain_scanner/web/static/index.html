@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Domain Scanner</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="login" class="gate hidden">
+  <form class="gate-card" id="login-form">
+    <h1>Domain Scanner</h1>
+    <p class="muted">Введи токен доступа</p>
+    <input type="password" id="token-input" placeholder="токен" autocomplete="current-password" required>
+    <button type="submit">Войти</button>
+    <p class="error hidden" id="login-error"></p>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <div class="brand">
+      <span class="logo">🛡️</span>
+      <h1>Domain Scanner</h1>
+    </div>
+    <nav>
+      <button class="tab active" data-view="scan">Скан</button>
+      <button class="tab" data-view="history">История</button>
+      <button class="tab" data-view="calibration">Калибровка</button>
+    </nav>
+    <div class="status" id="api-status"></div>
+  </header>
+
+  <!-- ------------------------------------------------------------- scan -->
+  <main id="view-scan" class="view">
+    <section class="panel input-panel">
+      <label for="domains">Домены <span class="muted">— по одному на строку, можно URL целиком</span></label>
+      <textarea id="domains" rows="6" spellcheck="false"
+        placeholder="lucky-cash-now.top&#10;https://northwind-shop.com/lp1&#10;another-lander.xyz"></textarea>
+      <div class="row">
+        <input type="text" id="label" placeholder="метка скана (необязательно), напр. «залив 14 июля»">
+        <button id="scan-btn" class="primary">Сканировать</button>
+      </div>
+      <p class="error hidden" id="scan-error"></p>
+    </section>
+
+    <section class="panel hidden" id="progress-panel">
+      <div class="progress-head">
+        <span id="progress-label">Сканирую…</span>
+        <button id="cancel-btn" class="ghost small">Отменить</button>
+      </div>
+      <div class="bar"><div class="bar-fill" id="progress-bar"></div></div>
+      <p class="muted small" id="progress-detail"></p>
+    </section>
+
+    <section id="results" class="hidden">
+      <div class="results-head">
+        <h2>Результаты</h2>
+        <div class="exports">
+          <a class="ghost small" id="export-csv">CSV</a>
+          <a class="ghost small" id="export-json">JSON</a>
+          <a class="ghost small" id="export-md">Markdown</a>
+        </div>
+      </div>
+      <div id="result-list"></div>
+      <div class="panel hidden" id="footprint-panel">
+        <h3>Общий след по пачке</h3>
+        <p class="muted small">Чем домены похожи друг на друга снаружи. Если тут густо —
+          Google видит их как одну операцию, и падать они будут вместе.</p>
+        <div id="footprint-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ---------------------------------------------------------- history -->
+  <main id="view-history" class="view hidden">
+    <section class="panel">
+      <h2>Прошлые сканы</h2>
+      <div id="scan-list" class="table-wrap"></div>
+    </section>
+    <section class="panel">
+      <h2>Домены и их судьба</h2>
+      <p class="muted small">Отмечай, что случилось с доменом после залива. На этом
+        строится вкладка «Калибровка» — без отметок она пустая.</p>
+      <div id="domain-list" class="table-wrap"></div>
+    </section>
+  </main>
+
+  <!-- ------------------------------------------------------ calibration -->
+  <main id="view-calibration" class="view hidden">
+    <section class="panel">
+      <h2>Что реально предсказывает проблемы</h2>
+      <p class="muted small">
+        Для каждой находки: как часто она встречается у доменов, которые выжили,
+        и у тех, что улетели на верификацию или в бан. <b>Lift</b> — разница.
+        Высокий положительный lift значит, что признак работает; около нуля или
+        отрицательный — шум, вес стоит снизить.
+      </p>
+      <div id="calibration-summary" class="muted small"></div>
+      <div id="calibration-list" class="table-wrap"></div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

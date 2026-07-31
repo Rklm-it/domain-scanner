@@ -85,3 +85,40 @@ def test_rate_limiter_allows_burst_up_to_limit():
     for _ in range(3):
         limiter.acquire()
     assert len(limiter._hits) == 3
+
+
+@pytest.mark.parametrize(
+    "ip,public",
+    [
+        ("8.8.8.8", True),
+        ("1.1.1.1", True),
+        ("169.254.169.254", False),   # cloud instance metadata
+        ("127.0.0.1", False),
+        ("10.1.2.3", False),
+        ("172.16.5.5", False),
+        ("192.168.0.1", False),
+        ("100.64.0.1", False),        # CGNAT
+        ("198.18.0.1", False),        # benchmarking
+        ("0.0.0.0", False),
+        ("::1", False),
+        ("2606:4700:4700::1111", True),
+        ("not-an-ip", False),
+    ],
+)
+def test_is_public_ip(ip, public):
+    from domain_scanner.utils import is_public_ip
+
+    assert is_public_ip(ip) is public
+
+
+def test_assert_public_host_rejects_literal_private_ip():
+    from domain_scanner.utils import BlockedTargetError, assert_public_host
+
+    with pytest.raises(BlockedTargetError):
+        assert_public_host("169.254.169.254")
+
+
+def test_assert_public_host_allows_public_literal():
+    from domain_scanner.utils import assert_public_host
+
+    assert assert_public_host("8.8.8.8") == ["8.8.8.8"]

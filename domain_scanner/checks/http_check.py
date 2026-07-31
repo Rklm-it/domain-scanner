@@ -17,8 +17,18 @@ from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
 from ..models import CheckResult
-from ..utils import USER_AGENTS, days_between, parse_domain
+from ..utils import (
+    USER_AGENTS,
+    BlockedTargetError,
+    assert_public_host,
+    days_between,
+    parse_domain,
+)
 from .base import ScanContext, register
+
+class TooManyRedirects(Exception):
+    """The redirect chain never settled."""
+
 
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 META_REFRESH_RE = re.compile(
@@ -96,17 +106,45 @@ def tls_info(host: str, timeout: float) -> dict:
 
 
 def fetch(ctx: ScanContext, url: str, ua: str) -> dict:
-    resp = ctx.session.get(
-        url,
-        headers={"User-Agent": USER_AGENTS[ua]},
-        timeout=ctx.config.http_timeout,
-        allow_redirects=True,
-    )
+    """Fetch a URL, validating every redirect hop.
+
+    Redirects are followed by hand rather than by requests, so a destination
+    cannot bounce the scanner onto a private address. That matters as soon as
+    this runs anywhere with an instance-metadata endpoint.
+    """
+    headers = {"User-Agent": USER_AGENTS[ua]}
+    chain: list[str] = []
+    current = url
+    resp = None
+
+    for _hop in range(ctx.config.max_redirects + 1):
+        if ctx.config.block_private_targets:
+            host = urlparse(current).hostname or ""
+            try:
+                assert_public_host(host)
+            except BlockedTargetError as exc:
+                raise BlockedTargetError(f"refusing to fetch {current}: {exc}") from exc
+        chain.append(current)
+        resp = ctx.session.get(
+            current,
+            headers=headers,
+            timeout=ctx.config.http_timeout,
+            allow_redirects=False,
+        )
+        if resp.status_code not in (301, 302, 303, 307, 308):
+            break
+        location = resp.headers.get("Location")
+        if not location:
+            break
+        current = urljoin(current, location)
+    else:
+        raise TooManyRedirects(f"more than {ctx.config.max_redirects} redirects from {url}")
+
     body = resp.text if "text" in resp.headers.get("Content-Type", "text/html") else ""
     return {
         "status": resp.status_code,
-        "final_url": resp.url,
-        "chain": [r.url for r in resp.history] + [resp.url],
+        "final_url": chain[-1],
+        "chain": chain,
         "headers": dict(resp.headers),
         "body": body,
         "length": len(body),

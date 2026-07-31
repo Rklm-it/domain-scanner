@@ -238,6 +238,63 @@ def reverse_ip(ip: str) -> str:
     return ".".join(reversed(ip.split(".")))
 
 
+# Ranges Python's ipaddress does not classify as private but which are still
+# never a legitimate scan target.
+EXTRA_BLOCKED_NETWORKS = tuple(
+    ipaddress.ip_network(n) for n in (
+        "100.64.0.0/10",     # RFC 6598 carrier-grade NAT
+        "192.0.0.0/24",      # IETF protocol assignments
+        "198.18.0.0/15",     # benchmarking
+        "64:ff9b::/96",      # NAT64
+    )
+)
+
+
+class BlockedTargetError(Exception):
+    """A request was aimed at an address the scanner must not touch."""
+
+
+def is_public_ip(value: str) -> bool:
+    """False for loopback, RFC1918, link-local, CGNAT and other reserved space.
+
+    169.254.169.254 (cloud instance metadata) falls under link-local, which is
+    the address that matters most when this runs on a VPS.
+    """
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    ):
+        return False
+    return not any(ip in net for net in EXTRA_BLOCKED_NETWORKS if ip.version == net.version)
+
+
+def assert_public_host(host: str) -> list[str]:
+    """Resolve ``host`` and refuse it unless every address is public.
+
+    Raises :class:`BlockedTargetError` for internal targets. Resolution failure
+    is not an error here -- the caller's own request will surface that.
+    """
+    if is_ip(host):
+        if not is_public_ip(host):
+            raise BlockedTargetError(f"{host} is not a public address")
+        return [host]
+    ips = resolve_host(host)
+    private = [ip for ip in ips if not is_public_ip(ip)]
+    if private:
+        raise BlockedTargetError(
+            f"{host} resolves to non-public address(es): {', '.join(private)}"
+        )
+    return ips
+
+
 def resolve_host(host: str) -> list[str]:
     try:
         infos = socket.getaddrinfo(host, None)

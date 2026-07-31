@@ -62,6 +62,11 @@ class Config:
     # Reverse-IP neighbour counts that suggest cheap shared/bulk hosting.
     crowded_ip_domains: int = 200
 
+    # Refuse to fetch anything that resolves to a private/loopback/link-local
+    # address. Keep this on for anything network-facing: it is what stops a
+    # hostile domain from pointing the scanner at 169.254.169.254.
+    block_private_targets: bool = True
+
     # --- connectivity (set by the CLI preflight) ---
     http_available: bool = True
     dns_available: bool = True

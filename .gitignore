@@ -10,3 +10,7 @@ dist/
 out/
 *.csv
 !tests/**/*.csv
+data/
+*.db
+*.db-wal
+*.db-shm

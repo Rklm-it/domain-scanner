@@ -14,16 +14,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4"]
+web = ["fastapi>=0.110", "uvicorn[standard]>=0.27"]
+dev = ["pytest>=7.4", "httpx"]
 
 [project.scripts]
 domain-scanner = "domain_scanner.cli:main"
 
 [tool.setuptools]
-packages = ["domain_scanner", "domain_scanner.checks"]
+packages = ["domain_scanner", "domain_scanner.checks", "domain_scanner.web"]
 
 [tool.setuptools.package-data]
-domain_scanner = ["data/*.json"]
+domain_scanner = ["data/*.json", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

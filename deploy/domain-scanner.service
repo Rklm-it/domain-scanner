@@ -1,0 +1,36 @@
+# systemd unit for a non-Docker install.
+#   sudo cp deploy/domain-scanner.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now domain-scanner
+[Unit]
+Description=Domain Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=scanner
+Group=scanner
+WorkingDirectory=/opt/domain-scanner
+EnvironmentFile=/opt/domain-scanner/.env
+ExecStart=/opt/domain-scanner/.venv/bin/uvicorn domain_scanner.web.main:app \
+    --host 127.0.0.1 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+
+# Scans are I/O bound across threads; one worker keeps the SQLite writer and
+# the in-process job queue in a single place. Scale with SCANNER_WORKERS.
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/domain-scanner/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

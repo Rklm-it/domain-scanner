@@ -27,6 +27,9 @@ northwind-shop.com  —  12/100  CLEAN
 
 ## Установка
 
+Два способа пользоваться: CLI локально или веб-морда на VPS
+(см. [Веб-приложение на VPS](#веб-приложение-на-vps)).
+
 ```bash
 git clone <repo> && cd domain-scanner
 pip install -r requirements.txt
@@ -37,7 +40,8 @@ pip install -e .
 domain-scanner example.com
 ```
 
-Нужен Python 3.10+. Зависимости всего две: `requests` и `dnspython`.
+Нужен Python 3.10+. У CLI зависимости всего две: `requests` и `dnspython`.
+Веб-части дополнительно нужны `fastapi` и `uvicorn` (`requirements-web.txt`).
 
 ## Быстрый старт
 
@@ -236,6 +240,156 @@ domain-scanner -f domains.txt --nameserver 192.168.1.1
 
 ---
 
+## Веб-приложение на VPS
+
+Тот же сканер, но через браузер: вставил домены, посмотрел результат, отметил
+судьбу домена. Плюс история и калибровка весов по твоим же данным.
+
+### Docker (проще)
+
+```bash
+git clone <repo> && cd domain-scanner
+cp .env.example .env
+
+# сгенерировать токен и вписать в .env
+python3 -c "import secrets; print('SCANNER_TOKEN=' + secrets.token_urlsafe(32))"
+nano .env
+
+docker compose up -d --build
+docker compose logs -f          # посмотреть, что поднялось
+```
+
+Порт 8000 биндится **только на 127.0.0.1** — наружу его выставляет nginx, см.
+ниже. Если нужен доступ сразу без прокси, поменяй в `docker-compose.yml`
+`127.0.0.1:8000:8000` на `8000:8000`, но тогда хотя бы поставь токен.
+
+### Без Docker
+
+```bash
+git clone <repo> && cd domain-scanner
+sudo ./deploy/install.sh
+```
+
+Скрипт ставит зависимости, создаёт пользователя `scanner`, разворачивает venv в
+`/opt/domain-scanner`, генерирует токен, ставит systemd-юнит и проверяет, что
+сервис поднялся. Токен печатается в конце — сохрани.
+
+Управление: `systemctl {status,restart,stop} domain-scanner`,
+логи — `journalctl -u domain-scanner -f`.
+
+### Домен и HTTPS
+
+```bash
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/domain-scanner
+sudo sed -i 's/scanner.example.com/scanner.твойдомен.com/g' \
+    /etc/nginx/sites-available/domain-scanner
+sudo ln -sf /etc/nginx/sites-available/domain-scanner /etc/nginx/sites-enabled/
+
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d scanner.твойдомен.com
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Порт 8000 в файрволе открывать **не надо** — nginx ходит на него по loopback.
+После установки nginx поставь в `.env` `SCANNER_TRUST_PROXY=1`, иначе лимит
+запросов будет видеть все обращения как один клиент (127.0.0.1).
+
+### Интерфейс
+
+Три вкладки:
+
+- **Скан** — вставляешь домены, видишь прогресс, разворачиваешь карточку с
+  находками. Внизу — общий след по пачке. Экспорт в CSV/JSON/Markdown.
+- **История** — прошлые сканы и список доменов. Тут же выпадашка «что стало с
+  доменом»: живёт / верификация / бан.
+- **Калибровка** — ради чего всё это. Для каждой находки показывает, как часто
+  она встречалась у выживших доменов и у проблемных. Колонка **lift** — разница
+  между ними. Высокий lift = признак реально предсказывает проблемы. Около нуля
+  = шум, вес в `models.py` можно снижать.
+
+Калибровка пустая, пока не отметишь судьбу доменов. Отмечай — на своих данных
+за пару месяцев она скажет о твоей вертикали больше, чем любые дефолтные веса.
+
+### Настройки веб-части
+
+Всё через `.env`, полный список с комментариями — в `.env.example`.
+
+| Переменная | По умолчанию | Что делает |
+| --- | --- | --- |
+| `SCANNER_TOKEN` | пусто | Токен доступа. **Пусто = вход без пароля** |
+| `SCANNER_TRUST_PROXY` | `0` | Ставь `1` за nginx — иначе рейт-лимит общий на всех |
+| `MAX_DOMAINS_PER_SCAN` | `50` | Потолок доменов за скан |
+| `SCANNER_RATE_LIMIT` | `20` | Сканов на клиента за `SCANNER_RATE_WINDOW` секунд |
+| `SCANNER_WORKERS` | `8` | Доменов параллельно внутри одного скана |
+| `SCANNER_MAX_CONCURRENT_SCANS` | `2` | Сканов одновременно |
+| `SCANNER_NAMESERVER` | системный | Резолвер для блоклистов (см. раздел выше) |
+| `SCANNER_PREFLIGHT` | `1` | Самопроверка связи |
+
+### API
+
+Всё, что делает интерфейс, доступно и curl-ом. Токен — в заголовке
+`X-Auth-Token` или `Authorization: Bearer`. Интерактивная схема: `/api/docs`.
+
+```bash
+H="X-Auth-Token: твой-токен"
+API=https://scanner.твойдомен.com
+
+# запустить скан
+curl -s -X POST $API/api/scans -H "$H" -H 'Content-Type: application/json' \
+  -d '{"domains":["a.com","b.com"],"label":"залив 14.07"}'
+
+# забрать результат
+curl -s $API/api/scans/<scan_id> -H "$H"
+
+# выгрузить CSV
+curl -s "$API/api/scans/<scan_id>/export?format=csv" -H "$H" -o scan.csv
+
+# отметить судьбу домена
+curl -s -X PUT $API/api/domains/a.com/outcome -H "$H" \
+  -H 'Content-Type: application/json' -d '{"outcome":"verification"}'
+```
+
+`GET /api/health` открыт без токена (для мониторинга) и показывает состояние
+связи сервера — если `status: degraded`, значит VPS сам не достучался наружу и
+часть проверок пропускается.
+
+### Бэкап
+
+Всё лежит в одном файле SQLite:
+
+```bash
+# docker
+docker compose exec scanner sqlite3 /app/data/scanner.db ".backup /app/data/backup.db"
+# systemd
+sqlite3 /opt/domain-scanner/data/scanner.db ".backup /tmp/backup.db"
+```
+
+### Безопасность — что уже сделано и что на тебе
+
+Сделано в коде:
+
+- **SSRF закрыт.** Сканер ходит по доменам, которые ему дают, — а на VPS это
+  прямая дорога к `169.254.169.254` (метаданные инстанса) и во внутреннюю сеть.
+  Любой хост, который резолвится в приватный, loopback, link-local или CGNAT
+  адрес, отклоняется. Редиректы разворачиваются вручную и **каждый хоп
+  проверяется отдельно** — иначе чужой домен увёл бы сканер внутрь 302-м.
+- Токен сравнивается через `secrets.compare_digest`, кука `HttpOnly` +
+  `SameSite=strict`.
+- Рейт-лимит на запуск сканов, потолок доменов на скан.
+- Контейнер бежит от непривилегированного пользователя, `no-new-privileges`,
+  пишет только в `/app/data`. systemd-юнит — с `ProtectSystem=strict`.
+- `robots.txt` закрывает индексацию.
+
+На тебе:
+
+- **Поставь `SCANNER_TOKEN`.** Без него любой, кто найдёт URL, будет запускать
+  сканы с твоего сервера от твоего IP.
+- Поставь HTTPS. Токен ходит в заголовке, по http его видно.
+- Не открывай 8000 в файрволе.
+
+
+---
+
 ## Глоссарий находок
 
 Стабильные коды, по ним удобно грепать JSON.
@@ -336,12 +490,12 @@ def check_mine(ctx: ScanContext) -> CheckResult:
 ## Тесты
 
 ```bash
-pip install pytest
+pip install -r requirements-web.txt pytest httpx
 python -m pytest
 ```
 
-107 тестов, сеть не трогают — все внешние источники подменены фикстурами в
-`tests/conftest.py`.
+166 тестов, сеть не трогают — внешние источники подменены фикстурами в
+`tests/conftest.py`, сканер в тестах веб-слоя замокан.
 
 ---
 

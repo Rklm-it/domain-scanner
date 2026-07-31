@@ -32,6 +32,12 @@ class FakeRdata:
         return self._text
 
 
+def redirect_to(location: str, status: int = 302):
+    """A response that sends the client somewhere else."""
+    return FakeResponse(status_code=status, text="",
+                        headers={"Content-Type": "text/html", "Location": location})
+
+
 class FakeResponse:
     def __init__(self, status_code=200, json_data=None, text="", headers=None, url="",
                  history=None):
@@ -84,7 +90,10 @@ class FakeSession:
 
 @pytest.fixture
 def config():
-    return Config.from_env()
+    cfg = Config.from_env()
+    # Unit tests use fake sessions, so there is no real host to validate.
+    cfg.block_private_targets = False
+    return cfg
 
 
 def make_ctx(domain: str, config: Config, resolver=None, session=None, shared=None):

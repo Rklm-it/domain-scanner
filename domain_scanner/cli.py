@@ -20,8 +20,8 @@ from .report import (
     to_markdown,
     use_color,
 )
+from .preflight import run_preflight
 from .scanner import scan_domains
-from .utils import make_resolver, make_session, probe_dns, probe_http
 
 EXIT_CLEAN = 0
 EXIT_RISKY = 1
@@ -62,29 +62,15 @@ def read_domains(args: argparse.Namespace) -> list[str]:
 
 
 def preflight(config: Config, stream, paint: Painter) -> None:
-    """Check this machine's own connectivity before blaming any domain.
-
-    Without this, a broken proxy or dead link makes every domain look like it
-    has an unreachable landing page.
-    """
-    session = make_session(config.proxy)
-    try:
-        http_ok, http_detail = probe_http(session, min(10.0, config.http_timeout))
-    finally:
-        session.close()
-    dns_ok, dns_detail = probe_dns(
-        make_resolver(config.dns_timeout, config.nameservers), config.dns_timeout
-    )
-    config.http_available = http_ok
-    config.dns_available = dns_ok
-
-    if not http_ok:
+    """Check this machine's own connectivity before blaming any domain."""
+    state = run_preflight(config)
+    if not state.http_ok:
         print(paint("warning: no outbound HTTPS from this machine "
-                    f"({http_detail}). Checks that need it will be skipped, not "
+                    f"({state.http_detail}). Checks that need it will be skipped, not "
                     "counted against the domains.", "\033[93m"), file=stream)
-    if not dns_ok:
+    if not state.dns_ok:
         print(paint("warning: DNS resolution is not working "
-                    f"({dns_detail}). DNS-based checks will be skipped.", "\033[93m"),
+                    f"({state.dns_detail}). DNS-based checks will be skipped.", "\033[93m"),
               file=stream)
 
 

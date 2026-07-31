@@ -1,6 +1,6 @@
 import time
 
-from conftest import FakeResolver, FakeResponse, FakeSession
+from conftest import FakeResolver, FakeResponse, FakeSession, redirect_to
 
 from domain_scanner.checks.blocklists import check_blocklists
 from domain_scanner.checks.crtsh import check_crtsh
@@ -396,14 +396,49 @@ def test_http_missing_trust_pages(ctx_factory):
 
 def test_http_offsite_redirect(ctx_factory):
     session = FakeSession({
-        "https://example.com": FakeResponse(
-            text=GOOD_PAGE, url="https://other-place.net/offer",
-            history=[FakeResponse(url="https://example.com/")],
-        ),
+        "https://example.com": redirect_to("https://other-place.net/offer"),
+        "https://other-place.net": FakeResponse(text=GOOD_PAGE),
     })
     result = check_http(ctx_factory(session=session))
     assert "http.offsite_redirect" in codes(result)
     assert result.data["final_domain"] == "other-place.net"
+    assert result.data["redirect_chain"] == [
+        "https://example.com/", "https://other-place.net/offer",
+    ]
+
+
+def test_http_follows_relative_redirect(ctx_factory):
+    calls = {"n": 0}
+
+    def route(url, **kwargs):
+        calls["n"] += 1
+        if url.endswith("/lp/"):
+            return FakeResponse(text=GOOD_PAGE)
+        return redirect_to("/lp/")
+
+    session = FakeSession({"https://example.com": route})
+    result = check_http(ctx_factory(session=session))
+    assert result.data["final_url"] == "https://example.com/lp/"
+    assert result.risk_points == 0
+
+
+def test_http_stops_on_redirect_loop(ctx_factory, config):
+    config.max_redirects = 3
+    session = FakeSession({"https://example.com": redirect_to("https://example.com/x"),
+                           "http://example.com": redirect_to("http://example.com/x")})
+    result = check_http(ctx_factory(session=session, cfg=config))
+    assert "http.unreachable" in codes(result)
+
+
+def test_http_refuses_private_targets(ctx_factory, config):
+    """A domain resolving to a private address must never be fetched."""
+    config.block_private_targets = True
+    session = FakeSession({"https://localhost": FakeResponse(text=GOOD_PAGE)})
+    ctx = ctx_factory("localhost.localdomain", session=session, cfg=config)
+    ctx.domain = "localhost"
+    result = check_http(ctx)
+    assert "http.unreachable" in codes(result)
+    assert session.calls == []  # never left the process
 
 
 def test_http_404_is_critical(ctx_factory):

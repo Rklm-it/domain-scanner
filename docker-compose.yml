@@ -1,0 +1,20 @@
+services:
+  scanner:
+    build: .
+    image: domain-scanner:latest
+    restart: unless-stopped
+    # Bound to localhost: nginx terminates TLS and proxies in. Change to
+    # "8000:8000" only if you are deliberately exposing it without a proxy.
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    # Blocklists refuse queries from public resolvers (8.8.8.8, 1.1.1.1), so
+    # point the container at a resolver that will answer. Your VPS provider's
+    # resolver is usually the right choice.
+    dns:
+      - 1.1.1.1
+    security_opt:
+      - no-new-privileges:true
