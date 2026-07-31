@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .. import __version__
-from ..config import Config, load_dotenv
+from ..config import Config, env_bool, env_float, env_int, env_str, load_dotenv
 from ..models import DomainReport
 from ..preflight import ConnectivityMonitor
 from ..report import to_csv, to_json, to_markdown
@@ -27,7 +27,7 @@ from .jobs import ScanRunner
 log = logging.getLogger("domain_scanner.web")
 
 STATIC_DIR = Path(__file__).parent / "static"
-MAX_DOMAINS_PER_SCAN = int(os.getenv("MAX_DOMAINS_PER_SCAN", "50"))
+MAX_DOMAINS_PER_SCAN = env_int("MAX_DOMAINS_PER_SCAN", 50)
 
 
 # --------------------------------------------------------------------- schemas
@@ -120,29 +120,28 @@ def create_app(
 ) -> FastAPI:
     load_dotenv(os.getenv("ENV_FILE", ".env"))
 
-    db = Database(db_path or os.getenv("SCANNER_DB", "data/scanner.db"))
+    db = Database(db_path or env_str("SCANNER_DB", "data/scanner.db"))
     cfg = config or Config.from_env(
-        workers=int(os.getenv("SCANNER_WORKERS", "8")),
-        http_timeout=float(os.getenv("SCANNER_HTTP_TIMEOUT", "12")),
+        workers=env_int("SCANNER_WORKERS", 8),
+        http_timeout=env_float("SCANNER_HTTP_TIMEOUT", 12.0),
     )
     # Anything network-facing must refuse internal targets.
     cfg.block_private_targets = True
-    if os.getenv("SCANNER_NAMESERVER"):
-        cfg.nameservers = [
-            ns.strip() for ns in os.environ["SCANNER_NAMESERVER"].split(",") if ns.strip()
-        ]
+    nameservers = env_str("SCANNER_NAMESERVER")
+    if nameservers:
+        cfg.nameservers = [ns.strip() for ns in nameservers.split(",") if ns.strip()]
 
-    auth = Auth(token if token is not None else os.getenv("SCANNER_TOKEN") or None)
+    auth = Auth(token if token is not None else env_str("SCANNER_TOKEN") or None)
     limiter = RateLimiter(
-        limit=int(os.getenv("SCANNER_RATE_LIMIT", "20")),
-        window=float(os.getenv("SCANNER_RATE_WINDOW", "3600")),
+        limit=env_int("SCANNER_RATE_LIMIT", 20),
+        window=env_float("SCANNER_RATE_WINDOW", 3600.0),
     )
-    trust_proxy = os.getenv("SCANNER_TRUST_PROXY", "0") == "1"
-    runner = ScanRunner(db, cfg, int(os.getenv("SCANNER_MAX_CONCURRENT_SCANS", "2")))
+    trust_proxy = env_bool("SCANNER_TRUST_PROXY", False)
+    runner = ScanRunner(db, cfg, env_int("SCANNER_MAX_CONCURRENT_SCANS", 2))
     monitor = ConnectivityMonitor(
         cfg,
-        interval=float(os.getenv("SCANNER_PREFLIGHT_INTERVAL", "300")),
-        enabled=os.getenv("SCANNER_PREFLIGHT", "1") != "0",
+        interval=env_float("SCANNER_PREFLIGHT_INTERVAL", 300.0),
+        enabled=env_bool("SCANNER_PREFLIGHT", True),
     )
 
     @asynccontextmanager

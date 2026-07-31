@@ -122,3 +122,82 @@ def test_assert_public_host_allows_public_literal():
     from domain_scanner.utils import assert_public_host
 
     assert assert_public_host("8.8.8.8") == ["8.8.8.8"]
+
+
+# ------------------------------------------------------- environment parsing
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("20", "20"),
+        ("20   # scans per client", "20"),          # docker-compose env_file
+        ("20\t# tab-separated comment", "20"),
+        ("value#nospace", "value#nospace"),         # '#' inside a value survives
+        ('"quoted # hash"', "quoted # hash"),
+        ("'single quoted'", "single quoted"),
+        ("  padded  ", "padded"),
+        ("# whole line", ""),
+        ("", ""),
+    ],
+)
+def test_strip_inline_comment(raw, expected):
+    from domain_scanner.config import strip_inline_comment
+
+    assert strip_inline_comment(raw) == expected
+
+
+def test_env_int_survives_inline_comment(monkeypatch):
+    """A stray comment must not put the service into a restart loop."""
+    from domain_scanner.config import env_int
+
+    monkeypatch.setenv("X_NUM", "8   # workers")
+    assert env_int("X_NUM", 99) == 8
+
+
+def test_env_int_falls_back_on_garbage(monkeypatch, caplog):
+    from domain_scanner.config import env_int
+
+    monkeypatch.setenv("X_NUM", "not-a-number")
+    assert env_int("X_NUM", 42) == 42
+
+
+def test_env_int_uses_default_when_unset(monkeypatch):
+    from domain_scanner.config import env_int
+
+    monkeypatch.delenv("X_NUM", raising=False)
+    assert env_int("X_NUM", 7) == 7
+
+
+def test_env_bool_variants(monkeypatch):
+    from domain_scanner.config import env_bool
+
+    for value, expected in [("1", True), ("true", True), ("YES", True), ("on", True),
+                            ("0", False), ("false", False), ("nonsense", False)]:
+        monkeypatch.setenv("X_FLAG", value)
+        assert env_bool("X_FLAG", False) is expected
+    monkeypatch.setenv("X_FLAG", "1   # enabled")
+    assert env_bool("X_FLAG", False) is True
+
+
+def test_load_dotenv_handles_comments_and_export(tmp_path, monkeypatch):
+    from domain_scanner.config import load_dotenv
+
+    env = tmp_path / ".env"
+    env.write_text(
+        "# a comment line\n"
+        "SCANNER_TOKEN=abc123\n"
+        "SCANNER_WORKERS=8   # how many at once\n"
+        "export SCANNER_DB=/data/x.db\n"
+        'QUOTED="has # hash"\n'
+        "\n"
+    )
+    for key in ("SCANNER_TOKEN", "SCANNER_WORKERS", "SCANNER_DB", "QUOTED"):
+        monkeypatch.delenv(key, raising=False)
+    load_dotenv(env)
+    import os
+
+    assert os.environ["SCANNER_TOKEN"] == "abc123"
+    assert os.environ["SCANNER_WORKERS"] == "8"
+    assert os.environ["SCANNER_DB"] == "/data/x.db"
+    assert os.environ["QUOTED"] == "has # hash"

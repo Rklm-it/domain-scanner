@@ -1,0 +1,33 @@
+# Caddy site block for the scanner.
+#
+# Use this instead of deploy/nginx.conf when the host already serves its sites
+# with Caddy. Caddy obtains and renews the certificate on its own -- there is
+# no certbot step. Append this to the existing Caddyfile, reload, done.
+#
+# Replace scanner.example.com with your subdomain, and make sure an A record
+# for it points at this server BEFORE reloading: Caddy tries to issue the
+# certificate immediately and will log failures until DNS resolves.
+
+scanner.example.com {
+    # "scanner" is the service name from this project's docker-compose.yml.
+    # It resolves only if Caddy and the scanner share a Docker network --
+    # see the compose notes in the README. Port 8000 here is the port INSIDE
+    # the container, which never changes, regardless of SCANNER_PORT.
+    reverse_proxy scanner:8000
+
+    encode gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        -Server
+    }
+
+    # A batch scan can run for minutes. The API answers immediately and the UI
+    # polls, but keep the proxy patient anyway.
+    request_body {
+        max_size 1MB
+    }
+}

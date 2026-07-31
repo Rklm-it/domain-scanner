@@ -294,7 +294,7 @@ sudo nginx -t && sudo systemctl reload nginx
 После установки nginx поставь в `.env` `SCANNER_TRUST_PROXY=1`, иначе лимит
 запросов будет видеть все обращения как один клиент (127.0.0.1).
 
-### Если на сервере уже есть другие сайты
+### Если на сервере уже есть другие сайты (nginx)
 
 Конфиг рассчитан на соседство: зона лимита называется `dscan_login`, апстрим —
 `dscan_backend`, пересечься с чужими именами не должно. Но перед `reload`
@@ -317,6 +317,35 @@ sudo nginx -t
 не сказал, `systemctl reload nginx` не запускай. И не удаляй
 `/etc/nginx/sites-enabled/default` вслепую — на сервере с несколькими сайтами
 он иногда содержит нужный дефолтный server-блок.
+
+
+### Если на сервере уже Caddy, а не nginx
+
+Тогда проще: Caddy сам выпускает и продлевает сертификаты, certbot не нужен.
+Сканер вообще не занимает порт на хосте — Caddy ходит к нему по внутренней
+docker-сети.
+
+```bash
+# 1. узнать сеть, в которой живёт Caddy
+docker inspect <имя-caddy-контейнера> \
+  --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}'
+
+# 2. прописать её в .env
+echo "PROXY_NETWORK=<имя-сети>" >> .env
+
+# 3. поднять с оверлеем: без публикации порта, но в общей сети
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+
+# 4. в Caddyfile добавить блок из deploy/Caddyfile.snippet,
+#    подставив свой поддомен, и перезагрузить Caddy
+docker exec <имя-caddy-контейнера> caddy reload --config /etc/caddy/Caddyfile
+```
+
+И поставь `SCANNER_TRUST_PROXY=1` в `.env` — иначе рейт-лимит увидит все
+запросы как один клиент.
+
+A-запись на поддомен должна существовать **до** перезагрузки Caddy: он сразу
+пойдёт за сертификатом и будет сыпать ошибками, пока DNS не разойдётся.
 
 ### Интерфейс
 

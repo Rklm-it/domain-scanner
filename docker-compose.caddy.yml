@@ -1,0 +1,19 @@
+# Overlay for a host where a Caddy (or other reverse proxy) container already
+# serves the sites and owns ports 80/443.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# It drops the published host port -- the proxy reaches the scanner over the
+# shared Docker network by service name, so nothing needs to touch the host's
+# port space at all. Set PROXY_NETWORK to the network the proxy is attached to.
+services:
+  scanner:
+    ports: !reset []
+    networks:
+      - default
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?set PROXY_NETWORK to the reverse proxy's docker network}
