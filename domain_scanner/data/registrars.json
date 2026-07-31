@@ -1,0 +1,43 @@
+{
+  "_comment": "Registrars and nameserver operators that show up disproportionately in abuse reporting, plus 'parking' nameservers that mean the domain is not really in use. Matching is case-insensitive substring against the RDAP registrar name / NS hostname. This is a soft signal only.",
+  "high_abuse": [
+    "namesilo",
+    "nicenic",
+    "webnic",
+    "west263",
+    "xin net",
+    "alibaba cloud computing (beijing)",
+    "chengdu west",
+    "jiangsu bangning",
+    "hongkong domain name",
+    "openprovider",
+    "regery",
+    "nicevps",
+    "sav.com",
+    "dynadot",
+    "internet domain service bs",
+    "tucows"
+  ],
+  "parking_ns": [
+    "sedoparking.com",
+    "parkingcrew.net",
+    "bodis.com",
+    "above.com",
+    "afternic.com",
+    "dan.com",
+    "undeveloped.com",
+    "parklogic.com",
+    "voodoo.com",
+    "cashparking.com",
+    "namefind.com",
+    "hugedomains.com",
+    "domaincontrol-parking"
+  ],
+  "free_hosting_ns": [
+    "freenom.com",
+    "000webhost.com",
+    "infinityfree.net",
+    "byet.org",
+    "epizy.com"
+  ]
+}

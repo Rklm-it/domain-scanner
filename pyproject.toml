@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "domain-scanner"
+version = "1.0.0"
+description = "Pre-flight risk checks for domains used in paid traffic"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "dnspython>=2.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+domain-scanner = "domain_scanner.cli:main"
+
+[tool.setuptools]
+packages = ["domain_scanner", "domain_scanner.checks"]
+
+[tool.setuptools.package-data]
+domain_scanner = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

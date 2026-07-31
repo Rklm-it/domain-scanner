@@ -1,0 +1,527 @@
+import time
+
+from conftest import FakeResolver, FakeResponse, FakeSession
+
+from domain_scanner.checks.blocklists import check_blocklists
+from domain_scanner.checks.crtsh import check_crtsh
+from domain_scanner.checks.dns_check import check_dns
+from domain_scanner.checks.hosting import check_hosting
+from domain_scanner.checks.http_check import (
+    check_cloaking,
+    check_http,
+    content_fingerprint,
+    detect_trackers,
+    find_policy_pages,
+)
+from domain_scanner.checks.naming import check_naming, looks_random
+from domain_scanner.checks.rdap import check_rdap, parse_rdap_time
+from domain_scanner.checks.reputation import check_safe_browsing, check_virustotal
+from domain_scanner.checks.tld import check_tld, tier_for
+from domain_scanner.checks.wayback import check_wayback
+
+DAY = 86400
+
+
+def codes(result):
+    return {f.code for f in result.findings}
+
+
+# --------------------------------------------------------------------------- tld
+
+
+def test_tier_lookup(config):
+    assert tier_for("com", config.tld_risk) == 0
+    assert tier_for("top", config.tld_risk) == 3
+    assert tier_for("online", config.tld_risk) == 2
+    # Unknown multi-label suffix falls back to its last label.
+    assert tier_for("shop.example", config.tld_risk) == config.tld_risk["default_tier"]
+
+
+def test_tld_flags_high_abuse(ctx_factory):
+    result = check_tld(ctx_factory("lander.top"))
+    assert "tld.high_abuse" in codes(result)
+    assert result.risk_points > 0
+
+
+def test_tld_clean_for_com(ctx_factory):
+    result = check_tld(ctx_factory("example.com"))
+    assert result.risk_points == 0
+
+
+# ------------------------------------------------------------------------ naming
+
+
+def test_looks_random():
+    assert looks_random("x7kqpzvvbb")
+    assert not looks_random("bestcoffee")
+
+
+def test_naming_flags_brand_lookalike(ctx_factory):
+    result = check_naming(ctx_factory("paypal-secure-login.top"))
+    assert "naming.brand_lookalike" in codes(result)
+    assert "naming.spammy_words" in codes(result)
+
+
+def test_naming_flags_typosquat(ctx_factory):
+    result = check_naming(ctx_factory("binnance.com"))
+    assert "naming.typosquat" in codes(result)
+
+
+def test_naming_clean_domain(ctx_factory):
+    result = check_naming(ctx_factory("northwindcoffee.com"))
+    assert result.risk_points == 0
+
+
+def test_naming_counts_hyphens(ctx_factory):
+    result = check_naming(ctx_factory("get-the-best-deal.xyz"))
+    assert "naming.many_hyphens" in codes(result)
+
+
+# --------------------------------------------------------------------------- dns
+
+
+def test_dns_collects_records(ctx_factory):
+    resolver = FakeResolver({
+        ("example.com", "A"): ["93.184.216.34"],
+        ("example.com", "NS"): ["ns1.example-dns.com.", "ns2.example-dns.com."],
+        ("example.com", "MX"): ["10 mail.example.com."],
+        ("example.com", "TXT"): ['"v=spf1 include:_spf.google.com ~all"'],
+        ("_dmarc.example.com", "TXT"): ['"v=DMARC1; p=none"'],
+    })
+    ctx = ctx_factory(resolver=resolver)
+    result = check_dns(ctx)
+    assert result.status == "ok"
+    assert result.data["a"] == ["93.184.216.34"]
+    assert result.data["ns_provider"] == ["example-dns.com"]
+    assert "dns.business_email" in codes(result)
+    assert ctx.get("ips") == ["93.184.216.34"]
+
+
+def test_dns_flags_parked_nameservers(ctx_factory):
+    resolver = FakeResolver({
+        ("example.com", "NS"): ["ns1.sedoparking.com."],
+        ("example.com", "A"): ["1.2.3.4"],
+    })
+    result = check_dns(ctx_factory(resolver=resolver))
+    assert "dns.parked" in codes(result)
+    assert "dns.no_mx" in codes(result)
+
+
+def test_dns_no_nameservers(ctx_factory):
+    result = check_dns(ctx_factory(resolver=FakeResolver({})))
+    assert "dns.no_ns" in codes(result)
+
+
+# -------------------------------------------------------------------- blocklists
+
+
+def test_blocklists_decodes_spamhaus(ctx_factory):
+    resolver = FakeResolver({
+        ("example.com.dbl.spamhaus.org", "A"): ["127.0.1.4"],
+    })
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert "blocklist.listed" in codes(result)
+    assert result.data["listings"]["Spamhaus DBL"] == ["phishing domain"]
+
+
+def test_blocklists_multiple_hits_are_critical(ctx_factory):
+    resolver = FakeResolver({
+        ("example.com.dbl.spamhaus.org", "A"): ["127.0.1.2"],
+        ("example.com.multi.uribl.com", "A"): ["127.0.0.2"],
+    })
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert any(f.severity == "critical" for f in result.findings)
+
+
+def test_blocklists_detects_rejected_query(ctx_factory):
+    resolver = FakeResolver({
+        ("example.com.multi.uribl.com", "A"): ["127.0.0.255"],
+    })
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert "blocklist.query_rejected" in codes(result)
+    assert result.risk_points == 0
+
+
+def test_blocklists_clean(ctx_factory):
+    result = check_blocklists(ctx_factory(resolver=FakeResolver({})))
+    assert "blocklist.clean" in codes(result)
+
+
+# -------------------------------------------------------------------------- rdap
+
+
+def test_parse_rdap_time():
+    assert parse_rdap_time("2020-01-02T03:04:05Z") > 0
+    assert parse_rdap_time("2020-01-02") > 0
+    assert parse_rdap_time("") is None
+
+
+def rdap_payload(created_days_ago=800, expires_in_days=400, statuses=None,
+                 registrar="Example Registrar, Inc."):
+    now = time.time()
+    return {
+        "objectClassName": "domain",
+        "status": statuses or ["client transfer prohibited"],
+        "events": [
+            {"eventAction": "registration",
+             "eventDate": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                        time.gmtime(now - created_days_ago * DAY))},
+            {"eventAction": "expiration",
+             "eventDate": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                        time.gmtime(now + expires_in_days * DAY))},
+        ],
+        "entities": [
+            {"roles": ["registrar"],
+             "vcardArray": ["vcard", [["version", {}, "text", "4.0"],
+                                      ["fn", {}, "text", registrar]]]},
+        ],
+        "nameservers": [{"ldhName": "NS1.EXAMPLE.COM"}],
+    }
+
+
+def test_rdap_established_domain(ctx_factory):
+    session = FakeSession({"rdap": FakeResponse(json_data=rdap_payload())})
+    ctx = ctx_factory(session=session)
+    result = check_rdap(ctx)
+    assert result.status == "ok"
+    assert "rdap.established" in codes(result)
+    assert result.risk_points == 0
+    assert ctx.get("age_days") == 800
+
+
+def test_rdap_brand_new_domain(ctx_factory):
+    session = FakeSession({
+        "rdap": FakeResponse(json_data=rdap_payload(created_days_ago=5, expires_in_days=360)),
+    })
+    result = check_rdap(ctx_factory(session=session))
+    assert "rdap.brand_new" in codes(result)
+    assert "rdap.one_year_term" in codes(result)
+
+
+def test_rdap_client_hold_is_critical(ctx_factory):
+    payload = rdap_payload(statuses=["client hold"])
+    session = FakeSession({"rdap": FakeResponse(json_data=payload)})
+    result = check_rdap(ctx_factory(session=session))
+    assert any(f.severity == "critical" for f in result.findings)
+
+
+def test_rdap_expiring_soon(ctx_factory):
+    session = FakeSession({"rdap": FakeResponse(json_data=rdap_payload(expires_in_days=10))})
+    result = check_rdap(ctx_factory(session=session))
+    assert "rdap.expiring_soon" in codes(result)
+
+
+def test_rdap_not_found(ctx_factory):
+    session = FakeSession({"rdap": FakeResponse(status_code=404)})
+    result = check_rdap(ctx_factory(session=session))
+    assert "rdap.not_registered" in codes(result)
+
+
+# ----------------------------------------------------------------------- wayback
+
+
+def cdx_rows(years, status="200"):
+    return [["timestamp", "original", "statuscode", "mimetype", "digest"]] + [
+        [f"{y}0601120000", f"http://example.com/", status, "text/html", f"D{y}"]
+        for y in years
+    ]
+
+
+def test_wayback_detects_recycled_domain(ctx_factory):
+    created = time.time() - 60 * DAY
+    session = FakeSession({
+        "cdx": FakeResponse(json_data=cdx_rows([2013, 2014, 2015, 2016])),
+        "web.archive.org/web/": FakeResponse(
+            text="<html><head><title>Lucky Star Casino - Play Slots</title></head></html>"
+        ),
+    })
+    ctx = ctx_factory(session=session, shared={"created_ts": created})
+    result = check_wayback(ctx)
+    assert result.data["recycled"] is True
+    assert "wayback.recycled_suspect" in codes(result)
+    assert any(f.severity == "critical" for f in result.findings)
+
+
+def test_wayback_recycled_but_only_parked(ctx_factory):
+    created = time.time() - 60 * DAY
+    session = FakeSession({
+        "cdx": FakeResponse(json_data=cdx_rows([2015, 2016])),
+        "web.archive.org/web/": FakeResponse(
+            text="<title>This domain is for sale</title>"
+        ),
+    })
+    result = check_wayback(ctx_factory(session=session, shared={"created_ts": created}))
+    assert "wayback.recycled_parked" in codes(result)
+
+
+def test_wayback_no_history(ctx_factory):
+    session = FakeSession({"cdx": FakeResponse(json_data=[], text="")})
+    result = check_wayback(ctx_factory(session=session))
+    assert "wayback.no_history" in codes(result)
+    assert result.risk_points == 0
+
+
+def test_wayback_mostly_redirects(ctx_factory):
+    created = time.time() - 8000 * DAY  # predates the archive history -> not recycled
+    rows = cdx_rows(list(range(2005, 2020)), status="301")
+    session = FakeSession({"cdx": FakeResponse(json_data=rows)})
+    result = check_wayback(ctx_factory(session=session, shared={"created_ts": created}))
+    assert result.data["recycled"] is False
+    assert "wayback.mostly_redirects" in codes(result)
+
+
+# ------------------------------------------------------------------------- crtsh
+
+
+def test_crtsh_detects_certs_before_registration(ctx_factory):
+    created = time.time() - 30 * DAY
+    entries = [
+        {"name_value": "example.com\nwww.example.com", "not_before": "2016-05-01T00:00:00",
+         "issuer_name": "C=US, O=Let's Encrypt, CN=R3"},
+        {"name_value": "example.com", "not_before": "2026-01-01T00:00:00",
+         "issuer_name": "C=US, O=Let's Encrypt, CN=R3"},
+    ]
+    session = FakeSession({"crt.sh": FakeResponse(json_data=entries, text="[...]")})
+    result = check_crtsh(ctx_factory(session=session, shared={"created_ts": created}))
+    assert "crtsh.predates_registration" in codes(result)
+
+
+def test_crtsh_many_subdomains(ctx_factory):
+    entries = [
+        {"name_value": f"lp{i}.example.com", "not_before": "2024-01-01T00:00:00",
+         "issuer_name": "O=Let's Encrypt"}
+        for i in range(50)
+    ]
+    session = FakeSession({"crt.sh": FakeResponse(json_data=entries, text="[...]")})
+    result = check_crtsh(ctx_factory(session=session))
+    assert "crtsh.many_subdomains" in codes(result)
+
+
+def test_crtsh_no_certificates(ctx_factory):
+    session = FakeSession({"crt.sh": FakeResponse(json_data=[], text="[]")})
+    result = check_crtsh(ctx_factory(session=session))
+    assert "crtsh.none" in codes(result)
+
+
+# ----------------------------------------------------------------------- hosting
+
+
+def test_hosting_identifies_asn(ctx_factory):
+    resolver = FakeResolver({
+        ("4.3.2.1.origin.asn.cymru.com", "TXT"): ['"13335 | 1.2.3.0/24 | US | arin | 2011-08-11"'],
+        ("AS13335.asn.cymru.com", "TXT"): ['"13335 | US | arin | 2010-07-14 | CLOUDFLARENET, US"'],
+    })
+    result = check_hosting(ctx_factory(resolver=resolver, shared={"ips": ["1.2.3.4"]}))
+    assert result.data["behind_cdn"] is True
+    assert "hosting.behind_cdn" in codes(result)
+
+
+def test_hosting_flags_crowded_ip(ctx_factory):
+    resolver = FakeResolver({
+        ("4.3.2.1.origin.asn.cymru.com", "TXT"): ['"64500 | 1.2.3.0/24 | NL | ripe | 2015-01-01"'],
+        ("AS64500.asn.cymru.com", "TXT"): ['"64500 | NL | ripe | 2015-01-01 | SOME-HOST, NL"'],
+    })
+    neighbours = "\n".join(f"site{i}.com" for i in range(300))
+    session = FakeSession({"hackertarget": FakeResponse(text=neighbours)})
+    result = check_hosting(
+        ctx_factory(resolver=resolver, session=session, shared={"ips": ["1.2.3.4"]})
+    )
+    assert "hosting.crowded_ip" in codes(result)
+    assert result.data["neighbour_count"] == 300
+
+
+def test_hosting_skips_without_ips(ctx_factory):
+    result = check_hosting(ctx_factory(shared={"ips": []}))
+    assert result.status == "skipped"
+
+
+# -------------------------------------------------------------------------- http
+
+
+GOOD_PAGE = """
+<html><head><title>Northwind Coffee</title></head><body>
+<h1>Fresh roasted coffee delivered</h1>
+<p>%s</p>
+<a href="/privacy-policy">Privacy Policy</a>
+<a href="/terms">Terms of Service</a>
+<a href="/contact">Contact us</a>
+<script src="https://www.googletagmanager.com/gtag/js?id=AW-123456789"></script>
+</body></html>
+""" % ("We roast in small batches every morning. " * 40)
+
+
+def test_find_policy_pages():
+    found = find_policy_pages(GOOD_PAGE, "https://example.com/")
+    assert set(found) >= {"privacy", "terms", "contact"}
+    assert found["privacy"] == "https://example.com/privacy-policy"
+
+
+def test_find_policy_pages_russian():
+    html = '<a href="/pol">Политика конфиденциальности</a><a href="/c">Контакты</a>'
+    found = find_policy_pages(html, "https://example.com/")
+    assert "privacy" in found and "contact" in found
+
+
+def test_detect_trackers():
+    trackers = detect_trackers(GOOD_PAGE)
+    assert "google_ads" in trackers
+    assert "AW-123456789" in trackers["google_ads"]
+
+
+def test_content_fingerprint_ignores_digits():
+    a = content_fingerprint("<p>order 12345</p>")
+    b = content_fingerprint("<p>order 98765</p>")
+    assert a == b
+
+
+def test_http_healthy_page(ctx_factory):
+    session = FakeSession({
+        "https://example.com": FakeResponse(text=GOOD_PAGE, url="https://example.com/"),
+    })
+    ctx = ctx_factory(session=session)
+    result = check_http(ctx)
+    assert result.status == "ok"
+    assert result.risk_points == 0
+    assert result.data["title"] == "Northwind Coffee"
+    assert set(result.data["policy_pages"]) >= {"privacy", "terms", "contact"}
+
+
+def test_http_missing_trust_pages(ctx_factory):
+    page = "<html><head><title>LP</title></head><body>%s</body></html>" % ("buy now " * 200)
+    session = FakeSession({"https://example.com": FakeResponse(text=page,
+                                                               url="https://example.com/")})
+    result = check_http(ctx_factory(session=session))
+    assert "http.no_trust_pages" in codes(result)
+
+
+def test_http_offsite_redirect(ctx_factory):
+    session = FakeSession({
+        "https://example.com": FakeResponse(
+            text=GOOD_PAGE, url="https://other-place.net/offer",
+            history=[FakeResponse(url="https://example.com/")],
+        ),
+    })
+    result = check_http(ctx_factory(session=session))
+    assert "http.offsite_redirect" in codes(result)
+    assert result.data["final_domain"] == "other-place.net"
+
+
+def test_http_404_is_critical(ctx_factory):
+    session = FakeSession({
+        "https://example.com": FakeResponse(status_code=404, text="not found",
+                                            url="https://example.com/"),
+    })
+    result = check_http(ctx_factory(session=session))
+    assert "http.client_error" in codes(result)
+    assert any(f.severity == "critical" for f in result.findings)
+
+
+def test_http_unreachable(ctx_factory):
+    result = check_http(ctx_factory(session=FakeSession({})))
+    assert "http.unreachable" in codes(result)
+
+
+def test_http_thin_content(ctx_factory):
+    session = FakeSession({
+        "https://example.com": FakeResponse(text="<html><title>x</title><body></body></html>",
+                                            url="https://example.com/"),
+    })
+    result = check_http(ctx_factory(session=session))
+    assert "http.thin_content" in codes(result)
+
+
+def test_http_js_offsite_redirect(ctx_factory):
+    page = "<html><title>t</title><body><script>window.location='https://elsewhere.io/go'" \
+           "</script>%s</body></html>" % ("text " * 300)
+    session = FakeSession({"https://example.com": FakeResponse(text=page,
+                                                               url="https://example.com/")})
+    result = check_http(ctx_factory(session=session))
+    assert "http.js_offsite_redirect" in codes(result)
+
+
+# ---------------------------------------------------------------------- cloaking
+
+
+def test_cloaking_detects_different_content(ctx_factory):
+    crawler_page = "<html><title>Nothing here</title><body>hello</body></html>"
+
+    def route(url, **kwargs):
+        ua = kwargs.get("headers", {}).get("User-Agent", "")
+        if "Googlebot" in ua or "AdsBot" in ua:
+            return FakeResponse(text=crawler_page, url="https://example.com/")
+        return FakeResponse(text=GOOD_PAGE, url="https://example.com/")
+
+    session = FakeSession({"https://example.com": route})
+    ctx = ctx_factory(session=session)
+    check_http(ctx)
+    result = check_cloaking(ctx)
+    assert "cloaking.content_differs" in codes(result)
+
+
+def test_cloaking_consistent(ctx_factory):
+    session = FakeSession({
+        "https://example.com": FakeResponse(text=GOOD_PAGE, url="https://example.com/"),
+    })
+    ctx = ctx_factory(session=session)
+    check_http(ctx)
+    result = check_cloaking(ctx)
+    assert "cloaking.consistent" in codes(result)
+    assert result.risk_points == 0
+
+
+def test_cloaking_skipped_without_baseline(ctx_factory):
+    result = check_cloaking(ctx_factory())
+    assert result.status == "skipped"
+
+
+# -------------------------------------------------------------------- reputation
+
+
+def test_safe_browsing_flagged(ctx_factory, config):
+    config.safe_browsing_key = "test-key"
+    session = FakeSession({
+        "safebrowsing": FakeResponse(json_data={"matches": [{"threatType": "SOCIAL_ENGINEERING"}]}),
+    })
+    result = check_safe_browsing(ctx_factory(session=session, cfg=config))
+    assert "safebrowsing.flagged" in codes(result)
+    assert any(f.severity == "critical" for f in result.findings)
+
+
+def test_safe_browsing_clean(ctx_factory, config):
+    config.safe_browsing_key = "test-key"
+    session = FakeSession({"safebrowsing": FakeResponse(json_data={})})
+    result = check_safe_browsing(ctx_factory(session=session, cfg=config))
+    assert result.risk_points == 0
+
+
+def test_virustotal_malicious(ctx_factory, config):
+    config.virustotal_key = "test-key"
+    payload = {"data": {"attributes": {
+        "last_analysis_stats": {"malicious": 7, "suspicious": 1, "harmless": 60},
+        "reputation": -25,
+        "categories": {"Forcepoint": "phishing and other frauds"},
+    }}}
+    session = FakeSession({"virustotal": FakeResponse(json_data=payload)})
+    result = check_virustotal(ctx_factory(session=session, cfg=config))
+    assert "virustotal.malicious" in codes(result)
+    assert "virustotal.bad_reputation" in codes(result)
+
+
+def test_virustotal_unknown_domain(ctx_factory, config):
+    config.virustotal_key = "test-key"
+    session = FakeSession({"virustotal": FakeResponse(status_code=404)})
+    result = check_virustotal(ctx_factory(session=session, cfg=config))
+    assert "virustotal.unknown" in codes(result)
+    assert result.risk_points == 0
+
+
+def test_naming_does_not_flag_official_brand_domain(ctx_factory):
+    result = check_naming(ctx_factory("google.com"))
+    assert "naming.brand_lookalike" not in codes(result)
+    assert "naming.official_brand" in codes(result)
+    assert result.risk_points == 0
+
+
+def test_naming_flags_brand_on_wrong_tld(ctx_factory):
+    result = check_naming(ctx_factory("google.top"))
+    assert "naming.brand_lookalike" in codes(result)
