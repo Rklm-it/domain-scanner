@@ -23,9 +23,14 @@ log = logging.getLogger("domain_scanner.jobs")
 class ScanRunner:
     """Runs queued scans, one worker per scan, N domains in parallel inside it."""
 
-    def __init__(self, db: Database, config: Config, max_concurrent_scans: int = 2) -> None:
+    def __init__(self, db: Database, config: Config, max_concurrent_scans: int = 2,
+                 monitor=None) -> None:
         self.db = db
         self.config = config
+        # Optional ConnectivityMonitor. Scans wait for its first probe so a
+        # host that cannot reach the internet is not mistaken for a batch of
+        # broken domains.
+        self.monitor = monitor
         self._pool = ThreadPoolExecutor(
             max_workers=max_concurrent_scans, thread_name_prefix="scan"
         )
@@ -47,6 +52,8 @@ class ScanRunner:
         self._pool.shutdown(wait=wait, cancel_futures=True)
 
     def _run(self, scan_id: str, domains: list[str]) -> None:
+        if self.monitor is not None:
+            self.monitor.wait_ready(timeout=45.0)
         self.db.set_scan_status(scan_id, "running")
         reports: list[DomainReport] = []
         try:

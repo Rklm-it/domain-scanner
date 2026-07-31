@@ -25,10 +25,20 @@ class Connectivity:
     http_detail: str = ""
     dns_detail: str = ""
     checked_at: float = 0.0
+    # False until the first probe lands. Reporting "ok" before anything has
+    # been measured would be the same lie the scanner refuses to tell about
+    # domains: not yet checked is not the same as fine.
+    probed: bool = False
 
     @property
     def degraded(self) -> bool:
         return not (self.http_ok and self.dns_ok)
+
+    @property
+    def status(self) -> str:
+        if not self.probed:
+            return "checking"
+        return "degraded" if self.degraded else "ok"
 
 
 def run_preflight(config: Config, apply: bool = True) -> Connectivity:
@@ -41,7 +51,8 @@ def run_preflight(config: Config, apply: bool = True) -> Connectivity:
     dns_ok, dns_detail = probe_dns(
         make_resolver(config.dns_timeout, config.nameservers), config.dns_timeout
     )
-    result = Connectivity(http_ok, dns_ok, http_detail, dns_detail, time.time())
+    result = Connectivity(http_ok, dns_ok, http_detail, dns_detail, time.time(),
+                          probed=True)
     if apply:
         config.http_available = http_ok
         config.dns_available = dns_ok
@@ -64,6 +75,7 @@ class ConnectivityMonitor:
         self.enabled = enabled
         self.state = Connectivity(True, True)
         self._stop = threading.Event()
+        self._ready = threading.Event()
         self._thread: threading.Thread | None = None
 
     def check_now(self) -> Connectivity:
@@ -77,23 +89,46 @@ class ConnectivityMonitor:
         return self.state
 
     def start(self) -> None:
+        """Begin probing without blocking the caller.
+
+        The first probe runs on the worker thread, not here: a server must not
+        wait on network round-trips before it binds its socket. Probing two
+        HTTP control hosts and two DNS names can take half a minute on a host
+        with blocked egress, and for all of that time nothing would be
+        listening -- including the health endpoint used to decide whether the
+        service came up at all.
+        """
         if not self.enabled:
             self.config.http_available = True
             self.config.dns_available = True
+            self.state.probed = True
+            self._ready.set()
             return
-        self.check_now()
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name="connectivity")
         self._thread.start()
 
+    def wait_ready(self, timeout: float = 30.0) -> bool:
+        """Block until the first probe has landed. Used before a scan starts.
+
+        Serving is never gated on this -- only scanning, which needs to know
+        what this host can reach before it attributes a failure to a domain.
+        """
+        return self._ready.wait(timeout)
+
     def _loop(self) -> None:
-        while not self._stop.wait(self.interval):
+        while True:
             try:
                 self.check_now()
             except Exception:  # noqa: BLE001 - monitoring must never crash the app
                 log.exception("connectivity probe failed")
+            finally:
+                self._ready.set()
+            if self._stop.wait(self.interval):
+                return
 
     def stop(self) -> None:
         self._stop.set()
+        self._ready.set()
         if self._thread:
             self._thread.join(timeout=2)

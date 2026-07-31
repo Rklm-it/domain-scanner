@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 
 import pytest
@@ -385,3 +386,76 @@ def test_rate_limit_is_per_client_behind_proxy(tmp_path, monkeypatch, scan_stub)
         assert c.post("/api/scans", json={"domains": ["a.com"]}, headers=a).status_code == 202
         assert c.post("/api/scans", json={"domains": ["b.com"]}, headers=b).status_code == 202
         assert c.post("/api/scans", json={"domains": ["c.com"]}, headers=a).status_code == 429
+
+
+# ------------------------------------------------------- startup must not block
+
+
+def test_server_binds_before_connectivity_probe_finishes(tmp_path, scan_stub, monkeypatch):
+    """A slow probe must not delay the socket.
+
+    uvicorn runs lifespan startup before it binds, so anything blocking there
+    means nothing is listening -- including /api/health, the endpoint used to
+    decide whether the service came up.
+    """
+    monkeypatch.setenv("SCANNER_PREFLIGHT", "1")
+    probe_started = threading.Event()
+    release = threading.Event()
+
+    def slow_probe(*_a, **_k):
+        probe_started.set()
+        release.wait(10)
+        return True, "eventually"
+
+    monkeypatch.setattr("domain_scanner.preflight.probe_http", slow_probe)
+    monkeypatch.setattr("domain_scanner.preflight.probe_dns", lambda *a, **k: (True, "ok"))
+
+    app = create_app(db_path=str(tmp_path / "s.db"), config=Config.from_env(), token="")
+    with TestClient(app) as c:
+        assert probe_started.wait(5), "probe never started"
+        # The probe is still in flight; the API must answer anyway.
+        started = time.monotonic()
+        body = c.get("/api/health")
+        assert body.status_code == 200
+        assert time.monotonic() - started < 2.0
+        # Honest about not knowing yet, rather than reporting a premature "ok".
+        assert body.json()["status"] == "checking"
+        assert body.json()["connectivity"]["probed"] is False
+        release.set()
+
+
+def test_scan_waits_for_first_connectivity_probe(tmp_path, scan_stub, monkeypatch):
+    """Scanning does wait, so a dead uplink is not blamed on the domains."""
+    monkeypatch.setenv("SCANNER_PREFLIGHT", "1")
+    release = threading.Event()
+
+    def slow_probe(*_a, **_k):
+        release.wait(10)
+        return False, "no egress"
+
+    monkeypatch.setattr("domain_scanner.preflight.probe_http", slow_probe)
+    monkeypatch.setattr("domain_scanner.preflight.probe_dns", lambda *a, **k: (True, "ok"))
+
+    app = create_app(db_path=str(tmp_path / "w.db"), config=Config.from_env(), token="")
+    with TestClient(app) as c:
+        scan_id = c.post("/api/scans", json={"domains": ["a.com"]}).json()["scan_id"]
+        time.sleep(0.4)
+        # Still queued: the runner is waiting on the probe, not scanning blind.
+        assert c.get(f"/api/scans/{scan_id}").json()["scan"]["status"] == "queued"
+        release.set()
+        body = wait_for(c, scan_id)
+        assert body["scan"]["status"] == "done"
+        assert app.state.config.http_available is False
+
+
+def test_monitor_start_returns_immediately():
+    from domain_scanner.config import Config as C
+    from domain_scanner.preflight import ConnectivityMonitor
+
+    cfg = C.from_env()
+    monitor = ConnectivityMonitor(cfg, interval=3600, enabled=False)
+    started = time.monotonic()
+    monitor.start()
+    assert time.monotonic() - started < 0.5
+    assert monitor.wait_ready(1) is True
+    monitor.stop()

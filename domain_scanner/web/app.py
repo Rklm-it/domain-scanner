@@ -137,11 +137,13 @@ def create_app(
         window=env_float("SCANNER_RATE_WINDOW", 3600.0),
     )
     trust_proxy = env_bool("SCANNER_TRUST_PROXY", False)
-    runner = ScanRunner(db, cfg, env_int("SCANNER_MAX_CONCURRENT_SCANS", 2))
     monitor = ConnectivityMonitor(
         cfg,
         interval=env_float("SCANNER_PREFLIGHT_INTERVAL", 300.0),
         enabled=env_bool("SCANNER_PREFLIGHT", True),
+    )
+    runner = ScanRunner(
+        db, cfg, env_int("SCANNER_MAX_CONCURRENT_SCANS", 2), monitor=monitor
     )
 
     @asynccontextmanager
@@ -180,10 +182,12 @@ def create_app(
     def health() -> dict:
         state = monitor.state
         return {
-            "status": "degraded" if state.degraded else "ok",
+            # "checking" until the first probe lands -- unverified is not "ok".
+            "status": state.status,
             "version": __version__,
             "auth_required": auth.enabled,
             "connectivity": {
+                "probed": state.probed,
                 "http": state.http_ok,
                 "dns": state.dns_ok,
                 "http_detail": "" if state.http_ok else state.http_detail,
