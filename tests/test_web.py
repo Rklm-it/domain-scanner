@@ -459,3 +459,28 @@ def test_monitor_start_returns_immediately():
     assert time.monotonic() - started < 0.5
     assert monitor.wait_ready(1) is True
     monitor.stop()
+
+
+# --------------------------------------------------------------- data directory
+
+
+def test_database_reports_unwritable_directory_clearly(tmp_path, monkeypatch):
+    """sqlite says "unable to open database file"; that is not a usable hint.
+
+    The real-world cause is a bind-mounted host directory owned by root while
+    the container runs unprivileged, and the message should say so.
+    """
+    target = tmp_path / "locked"
+    target.mkdir()
+    monkeypatch.setattr("domain_scanner.web.db.os.access", lambda *a, **k: False)
+    with pytest.raises(RuntimeError) as excinfo:
+        Database(target / "scanner.db")
+    message = str(excinfo.value)
+    assert "not writable" in message
+    assert "named volume" in message
+
+
+def test_database_creates_missing_directory(tmp_path):
+    db = Database(tmp_path / "nested" / "deeper" / "scanner.db")
+    scan_id = db.create_scan(["a.com"])
+    assert db.get_scan(scan_id) is not None

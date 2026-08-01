@@ -8,6 +8,7 @@ flagged is the only way to calibrate the scoring against real outcomes.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -64,7 +65,7 @@ class Database:
         self.path = str(path)
         self._local = threading.local()
         if self.path != ":memory:":
-            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_writable(Path(self.path))
         else:
             # An in-memory database must share one connection or it vanishes.
             self._shared = sqlite3.connect(":memory:", check_same_thread=False)
@@ -72,6 +73,33 @@ class Database:
             self._lock = threading.Lock()
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+
+    @staticmethod
+    def _ensure_writable(db_path: Path) -> None:
+        """Fail with an actionable message instead of sqlite's opaque one.
+
+        sqlite reports "unable to open database file" for a directory it cannot
+        write to, which sends people looking for a corrupt database. The usual
+        cause in Docker is a bind-mounted host directory owned by root while
+        the container runs unprivileged.
+        """
+        parent = db_path.parent
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot create the database directory {parent}: {exc.strerror}"
+            ) from exc
+        if not os.access(parent, os.W_OK | os.X_OK):
+            uid = os.getuid() if hasattr(os, "getuid") else "?"
+            raise RuntimeError(
+                f"the database directory {parent} is not writable by uid {uid}. "
+                "In Docker this usually means a bind-mounted host directory owned "
+                "by root while the container runs unprivileged -- either chown it "
+                "to the container's uid, or use a named volume."
+            )
+        if db_path.exists() and not os.access(db_path, os.W_OK):
+            raise RuntimeError(f"the database file {db_path} is not writable")
 
     def connect(self) -> sqlite3.Connection:
         if self.path == ":memory:":

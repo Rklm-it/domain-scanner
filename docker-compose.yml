@@ -10,7 +10,12 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
+      # A named volume, not a bind mount. Docker initialises a named volume
+      # with the image's ownership, so the unprivileged container can write to
+      # it. A bind-mounted ./data would be created root-owned by the daemon and
+      # the container could not open the database at all.
+      # Back up with:  docker compose cp scanner:/app/data/scanner.db ./backup.db
+      - scanner-data:/app/data
     # Blocklists refuse queries from public resolvers (8.8.8.8, 1.1.1.1), so
     # point the container at a resolver that will answer. Your VPS provider's
     # resolver is usually the right choice.
@@ -18,3 +23,6 @@ services:
       - 1.1.1.1
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  scanner-data:
