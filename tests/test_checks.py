@@ -1,8 +1,13 @@
 import time
 
+import pytest
 from conftest import FakeResolver, FakeResponse, FakeSession, redirect_to
 
-from domain_scanner.checks.blocklists import check_blocklists
+from domain_scanner.checks.blocklists import (
+    check_blocklists,
+    reset_zone_health_cache,
+    zone_is_answering,
+)
 from domain_scanner.checks.crtsh import check_crtsh
 from domain_scanner.checks.dns_check import check_dns
 from domain_scanner.checks.hosting import check_hosting
@@ -115,8 +120,23 @@ def test_dns_no_nameservers(ctx_factory):
 # -------------------------------------------------------------------- blocklists
 
 
+HEALTHY_ZONES = {
+    ("dbltest.com.dbl.spamhaus.org", "A"): ["127.0.1.2"],
+    ("test.surbl.org.multi.surbl.org", "A"): ["127.0.0.254"],
+    ("test.uribl.com.multi.uribl.com", "A"): ["127.0.0.2"],
+}
+
+
+@pytest.fixture(autouse=True)
+def _clear_zone_cache():
+    reset_zone_health_cache()
+    yield
+    reset_zone_health_cache()
+
+
 def test_blocklists_decodes_spamhaus(ctx_factory):
     resolver = FakeResolver({
+        **HEALTHY_ZONES,
         ("example.com.dbl.spamhaus.org", "A"): ["127.0.1.4"],
     })
     result = check_blocklists(ctx_factory(resolver=resolver))
@@ -126,6 +146,7 @@ def test_blocklists_decodes_spamhaus(ctx_factory):
 
 def test_blocklists_multiple_hits_are_critical(ctx_factory):
     resolver = FakeResolver({
+        **HEALTHY_ZONES,
         ("example.com.dbl.spamhaus.org", "A"): ["127.0.1.2"],
         ("example.com.multi.uribl.com", "A"): ["127.0.0.2"],
     })
@@ -133,18 +154,61 @@ def test_blocklists_multiple_hits_are_critical(ctx_factory):
     assert any(f.severity == "critical" for f in result.findings)
 
 
-def test_blocklists_detects_rejected_query(ctx_factory):
+def test_blocklists_clean(ctx_factory):
+    """Clean only counts when the zones actually answered."""
+    result = check_blocklists(ctx_factory(resolver=FakeResolver(dict(HEALTHY_ZONES))))
+    assert "blocklist.clean" in codes(result)
+    assert set(result.data["zones_verified"]) == {"Spamhaus DBL", "SURBL", "URIBL"}
+
+
+def test_blocklists_silent_zone_is_not_reported_clean(ctx_factory):
+    """Spamhaus answers NXDOMAIN to unauthorised resolvers.
+
+    That is indistinguishable from "not listed", so a zone whose test point
+    does not resolve must be reported as unchecked, never as clean.
+    """
+    resolver = FakeResolver({})  # nothing answers, not even the test points
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert "blocklist.clean" not in codes(result)
+    assert "blocklist.no_data" in codes(result)
+    assert "blocklist.unavailable" in codes(result)
+    assert result.data["zones_verified"] == []
+
+
+def test_blocklists_partial_availability(ctx_factory):
+    """One dead zone must not stop the others being consulted."""
     resolver = FakeResolver({
-        ("example.com.multi.uribl.com", "A"): ["127.0.0.255"],
+        ("test.uribl.com.multi.uribl.com", "A"): ["127.0.0.2"],
+        ("example.com.multi.uribl.com", "A"): ["127.0.0.2"],
     })
     result = check_blocklists(ctx_factory(resolver=resolver))
-    assert "blocklist.query_rejected" in codes(result)
-    assert result.risk_points == 0
+    assert result.data["zones_verified"] == ["URIBL"]
+    assert "Spamhaus DBL" in result.data["unavailable_zones"]
+    assert "blocklist.listed" in codes(result)
 
 
-def test_blocklists_clean(ctx_factory):
-    result = check_blocklists(ctx_factory(resolver=FakeResolver({})))
-    assert "blocklist.clean" in codes(result)
+def test_zone_health_is_cached(ctx_factory):
+    resolver = FakeResolver(dict(HEALTHY_ZONES))
+    ctx = ctx_factory(resolver=resolver)
+    assert zone_is_answering(ctx, "dbl.spamhaus.org") is True
+    before = len(resolver.queries)
+    assert zone_is_answering(ctx, "dbl.spamhaus.org") is True
+    assert len(resolver.queries) == before  # served from cache
+
+
+def test_zone_without_test_point_is_queried_but_does_not_prove_clean(ctx_factory):
+    """A hit still counts; silence from such a zone does not mean clean."""
+    resolver = FakeResolver({
+        ("example.com.uribl.spameatingmonkey.net", "A"): ["127.0.0.2"],
+    })
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert "SEM URIBL" in result.data["zones_opportunistic"]
+    assert "blocklist.listed" in codes(result)
+
+    # Same zone, nothing listed and no verified zone -> not "clean".
+    reset_zone_health_cache()
+    quiet = check_blocklists(ctx_factory(resolver=FakeResolver({})))
+    assert "blocklist.clean" not in codes(quiet)
 
 
 # -------------------------------------------------------------------------- rdap
@@ -560,3 +624,27 @@ def test_naming_does_not_flag_official_brand_domain(ctx_factory):
 def test_naming_flags_brand_on_wrong_tld(ctx_factory):
     result = check_naming(ctx_factory("google.top"))
     assert "naming.brand_lookalike" in codes(result)
+
+
+def test_blocklist_error_codes_match_exactly_not_by_prefix(ctx_factory):
+    """127.0.0.14 is a valid URIBL answer, not an error.
+
+    Matching error codes by prefix would treat every 127.0.0.1x reply as a
+    rejected query and silently drop real listings.
+    """
+    resolver = FakeResolver({
+        ("test.uribl.com.multi.uribl.com", "A"): ["127.0.0.14"],
+        ("example.com.multi.uribl.com", "A"): ["127.0.0.14"],
+    })
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert "URIBL" in result.data["zones_verified"]
+    assert "URIBL" not in result.data["unavailable_zones"]
+    assert "blocklist.listed" in codes(result)
+
+
+def test_blocklist_real_error_code_is_still_rejected(ctx_factory):
+    resolver = FakeResolver({
+        ("test.uribl.com.multi.uribl.com", "A"): ["127.0.0.1"],
+    })
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert "URIBL" in result.data["unavailable_zones"]

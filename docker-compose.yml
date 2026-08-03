@@ -16,11 +16,10 @@ services:
       # the container could not open the database at all.
       # Back up with:  docker compose cp scanner:/app/data/scanner.db ./backup.db
       - scanner-data:/app/data
-    # Blocklists refuse queries from public resolvers (8.8.8.8, 1.1.1.1), so
-    # point the container at a resolver that will answer. Your VPS provider's
-    # resolver is usually the right choice.
-    dns:
-      - 1.1.1.1
+    # No dns: override on purpose. Spamhaus/SURBL/URIBL refuse queries from
+    # public resolvers, so pinning the container to 1.1.1.1 or 8.8.8.8 would
+    # silently disable those checks. Inheriting the host's resolver is the
+    # better default; set SCANNER_NAMESERVER in .env to choose explicitly.
     security_opt:
       - no-new-privileges:true
 

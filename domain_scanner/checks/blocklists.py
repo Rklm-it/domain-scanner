@@ -7,9 +7,29 @@ blocklists is one that has been used for something before.
 
 from __future__ import annotations
 
+import threading
+import time
+
 from ..models import CheckResult
 from ..utils import dns_query_quiet
 from .base import ScanContext, register
+
+# Every list publishes a test point that resolves whenever the zone is
+# answering you. Without checking it there is no way to tell "not listed" from
+# "your resolver is not allowed to ask" -- Spamhaus answers the latter with
+# NXDOMAIN, which is indistinguishable from a clean domain. Reporting that as
+# clean is exactly the kind of unearned reassurance this tool exists to avoid.
+TEST_POINTS: dict[str, str] = {
+    "dbl.spamhaus.org": "dbltest.com",
+    "multi.surbl.org": "test.surbl.org",
+    "multi.uribl.com": "test.uribl.com",
+}
+
+# Zone availability is a property of the resolver, not of the domain being
+# scanned, so it is probed once and cached for the whole batch.
+_ZONE_HEALTH_TTL = 600.0
+_zone_health: dict[str, tuple[bool, float]] = {}
+_zone_lock = threading.Lock()
 
 # zone -> (label, {return code prefix: meaning})
 ZONES: dict[str, tuple[str, dict[str, str]]] = {
@@ -48,9 +68,41 @@ ZONES: dict[str, tuple[str, dict[str, str]]] = {
     "fresh.spameatingmonkey.net": ("SEM FRESH", {"127.0.0.2": "registered in the last days"}),
 }
 
-# Codes every zone uses to signal "your query was rejected", not "listed".
-ERROR_PREFIXES = ("127.255.255.", "127.0.0.1")
-BLOCKED_CODES = {"127.0.0.255"}
+# Codes that mean "your query was rejected", not "listed".
+#
+# These must be matched exactly, never by prefix: 127.0.0.14 is a perfectly
+# valid URIBL answer (black+grey+red = 2+4+8) and startswith("127.0.0.1")
+# would swallow it, along with everything from .10 to .19.
+ERROR_CODES = {"127.0.0.1", "127.0.0.255"}
+ERROR_PREFIXES = ("127.255.255.",)
+BLOCKED_CODES = ERROR_CODES
+
+
+def zone_is_answering(ctx: ScanContext, zone: str) -> bool | None:
+    """Is this blocklist replying to us at all?
+
+    Returns None when the zone publishes no test point we can use.
+    """
+    test_host = TEST_POINTS.get(zone)
+    if not test_host:
+        return None
+    now = time.monotonic()
+    with _zone_lock:
+        cached = _zone_health.get(zone)
+        if cached and now - cached[1] < _ZONE_HEALTH_TTL:
+            return cached[0]
+    answers = dns_query_quiet(ctx.resolver, f"{test_host}.{zone}", "A")
+    healthy = bool(answers) and not any(
+        a in ERROR_CODES or a.startswith(ERROR_PREFIXES) for a in answers
+    )
+    with _zone_lock:
+        _zone_health[zone] = (healthy, now)
+    return healthy
+
+
+def reset_zone_health_cache() -> None:
+    with _zone_lock:
+        _zone_health.clear()
 
 
 def _decode(zone: str, answers: list[str]) -> tuple[list[str], bool]:
@@ -59,7 +111,7 @@ def _decode(zone: str, answers: list[str]) -> tuple[list[str], bool]:
     reasons: list[str] = []
     rejected = False
     for ans in answers:
-        if ans in BLOCKED_CODES or ans.startswith(ERROR_PREFIXES):
+        if ans in ERROR_CODES or ans.startswith(ERROR_PREFIXES):
             rejected = True
             continue
         if ans in codes:
@@ -86,8 +138,20 @@ def check_blocklists(ctx: ScanContext) -> CheckResult:
     result = CheckResult(name="blocklists")
     listings: dict[str, list[str]] = {}
     rejected_zones: list[str] = []
+    unavailable: list[str] = []
+    # Zones whose test point resolved: silence from these genuinely means
+    # "not listed", so only these license a clean verdict.
+    verified: list[str] = []
+    # Zones that publish no test point. A hit is still worth reporting, but
+    # silence proves nothing -- they might not be answering us at all.
+    opportunistic: list[str] = []
 
     for zone, (label, _codes) in ZONES.items():
+        health = zone_is_answering(ctx, zone)
+        if health is False:
+            unavailable.append(label)
+            continue
+        (verified if health else opportunistic).append(label)
         answers = dns_query_quiet(ctx.resolver, f"{ctx.domain}.{zone}", "A")
         if not answers:
             continue
@@ -97,7 +161,13 @@ def check_blocklists(ctx: ScanContext) -> CheckResult:
         if reasons:
             listings[label] = reasons
 
-    result.data = {"listings": listings, "rejected_zones": rejected_zones}
+    result.data = {
+        "listings": listings,
+        "rejected_zones": rejected_zones,
+        "unavailable_zones": unavailable,
+        "zones_verified": verified,
+        "zones_opportunistic": opportunistic,
+    }
 
     for label, reasons in listings.items():
         fresh_only = label == "SEM FRESH"
@@ -109,15 +179,24 @@ def check_blocklists(ctx: ScanContext) -> CheckResult:
             {"zone": label, "reasons": reasons},
         )
 
-    if rejected_zones:
+    stale = sorted(set(rejected_zones) | set(unavailable))
+    if stale:
         result.add(
-            "blocklist.query_rejected", "info",
-            f"{', '.join(sorted(set(rejected_zones)))} refused the query — public resolvers "
-            "(8.8.8.8, 1.1.1.1) are blocked by these lists. Use your ISP/local resolver "
-            "or --nameserver for meaningful results.",
-            {"zones": sorted(set(rejected_zones))},
+            "blocklist.unavailable", "info",
+            f"no answer from {', '.join(stale)} — these lists refuse queries from public "
+            "resolvers (8.8.8.8, 1.1.1.1). Point --nameserver (or SCANNER_NAMESERVER) at "
+            "your ISP/local resolver, otherwise these lists are not being consulted at all.",
+            {"zones": stale},
         )
 
-    if not listings and not rejected_zones:
-        result.add("blocklist.clean", "info", "not on any queried blocklist")
+    if not listings:
+        if verified:
+            result.add("blocklist.clean", "info",
+                       f"not listed on {', '.join(verified)}")
+        else:
+            # No zone was confirmed to be answering. Saying "clean" here would
+            # mean "we did not look".
+            result.add("blocklist.no_data", "info",
+                       "no blocklist could be confirmed as answering — this domain "
+                       "was not actually checked against any list")
     return result
