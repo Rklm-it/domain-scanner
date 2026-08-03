@@ -4,6 +4,7 @@ import pytest
 from conftest import FakeResolver, FakeResponse, FakeSession, redirect_to
 
 from domain_scanner.checks.blocklists import (
+    ZONES,
     check_blocklists,
     reset_zone_health_cache,
     zone_is_answering,
@@ -187,13 +188,48 @@ def test_blocklists_partial_availability(ctx_factory):
     assert "blocklist.listed" in codes(result)
 
 
+def _zone(label):
+    return next(z for z in ZONES if z.label == label)
+
+
 def test_zone_health_is_cached(ctx_factory):
     resolver = FakeResolver(dict(HEALTHY_ZONES))
     ctx = ctx_factory(resolver=resolver)
-    assert zone_is_answering(ctx, "dbl.spamhaus.org") is True
+    spamhaus = _zone("Spamhaus DBL")
+    assert zone_is_answering(ctx, spamhaus) is True
     before = len(resolver.queries)
-    assert zone_is_answering(ctx, "dbl.spamhaus.org") is True
+    assert zone_is_answering(ctx, spamhaus) is True
     assert len(resolver.queries) == before  # served from cache
+
+
+def test_subscriber_key_switches_to_the_dqs_zone(ctx_factory, monkeypatch):
+    """A free DQS key is the supported way past the public-resolver block."""
+    monkeypatch.setenv("SPAMHAUS_DQS_KEY", "secretkey")
+    resolver = FakeResolver({
+        ("dbltest.com.secretkey.dbl.dq.spamhaus.net", "A"): ["127.0.1.2"],
+        ("example.com.secretkey.dbl.dq.spamhaus.net", "A"): ["127.0.1.4"],
+    })
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert "Spamhaus DBL" in result.data["zones_using_key"]
+    assert result.data["listings"]["Spamhaus DBL"] == ["phishing domain"]
+
+
+def test_no_key_uses_the_public_zone(ctx_factory, monkeypatch):
+    monkeypatch.delenv("SPAMHAUS_DQS_KEY", raising=False)
+    resolver = FakeResolver(dict(HEALTHY_ZONES))
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert result.data["zones_using_key"] == []
+    assert "Spamhaus DBL" in result.data["zones_verified"]
+
+
+def test_uribl_key_is_supported(ctx_factory, monkeypatch):
+    monkeypatch.setenv("URIBL_KEY", "abc123")
+    resolver = FakeResolver({
+        ("test.uribl.com.abc123.multi.uribl.com", "A"): ["127.0.0.2"],
+    })
+    result = check_blocklists(ctx_factory(resolver=resolver))
+    assert "URIBL" in result.data["zones_using_key"]
+    assert "URIBL" in result.data["zones_verified"]
 
 
 def test_zone_without_test_point_is_queried_but_does_not_prove_clean(ctx_factory):
