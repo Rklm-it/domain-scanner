@@ -6,10 +6,10 @@ from .models import DomainReport
 
 # score >= threshold -> verdict
 VERDICTS: list[tuple[int, str, str]] = [
-    (70, "AVOID", "Do not put spend behind this domain."),
-    (40, "RISKY", "Usable only if you fix what is listed below first."),
-    (20, "WATCH", "Nothing disqualifying, but it is not a clean sheet."),
-    (0, "CLEAN", "No meaningful red flags found."),
+    (70, "AVOID", "Не лить на этот домен."),
+    (40, "RISKY", "Можно, но сначала почини перечисленное ниже."),
+    (20, "WATCH", "Ничего дисквалифицирующего, но и не идеально."),
+    (0, "CLEAN", "Значимых красных флагов не нашлось."),
 ]
 
 # A single severe finding should not be diluted by a pile of clean checks.
@@ -43,9 +43,9 @@ def score_report(report: DomainReport) -> DomainReport:
 
 
 EXTRA_BLURBS = {
-    "UNREGISTERED": "Domain is not registered — nothing to assess yet.",
-    "INVALID": "Could not be parsed as a domain.",
-    "ERROR": "The scan itself failed.",
+    "UNREGISTERED": "Домен не зарегистрирован — оценивать пока нечего.",
+    "INVALID": "Не распознано как домен.",
+    "ERROR": "Сам скан завершился ошибкой.",
 }
 
 

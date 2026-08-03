@@ -153,7 +153,7 @@ def test_json_output_roundtrips():
 def test_csv_has_one_row_per_domain():
     lines = [l for l in to_csv(batch()).splitlines() if l.strip()]
     assert len(lines) == 4  # header + 3
-    assert lines[0].startswith("domain,score,verdict")
+    assert lines[0].startswith("домен,счёт,вердикт")
 
 
 def test_render_report_is_plain_without_color():
@@ -222,7 +222,7 @@ def test_render_report_marks_low_confidence_as_provisional():
     ]
     score_report(r)
     text = render_report(r, Painter(False))
-    assert "provisional" in text
+    assert "предварительный" in text
     assert "http, rdap, wayback" in text
 
 

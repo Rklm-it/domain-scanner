@@ -99,7 +99,7 @@ def check_wayback(ctx: ScanContext) -> CheckResult:
     if not rows:
         result.data = {"snapshots": 0}
         result.add("wayback.no_history", "info",
-                   "no archive.org history — nothing has been published here before")
+                   "в archive.org пусто — на домене раньше ничего не публиковали")
         return result
 
     stamps = [r[0] for r in rows if r and r[0]]
@@ -151,41 +151,40 @@ def check_wayback(ctx: ScanContext) -> CheckResult:
             sample = next(t for t in titles if t["kind"] == "suspect")
             result.add(
                 "wayback.recycled_suspect", "critical",
-                f"re-registered domain with a prior life in a flagged vertical "
-                f"({years_txt}): \"{sample['title']}\"",
+                f"домен перерегистрирован, а в прошлой жизни был в палёной вертикали "
+                f"({years_txt}): «{sample['title']}»",
                 {"gap_days": gap_days, "titles": titles},
             )
         elif kinds == {"parked"}:
             result.add(
                 "wayback.recycled_parked", "medium",
-                f"re-registered; previously only parked pages ({years_txt}) — "
-                f"{gap_days} days of history predate the current registration",
+                f"домен перерегистрирован, раньше на нём была только парковка ({years_txt}) — "
+                f"история старше текущей регистрации на {gap_days} дн.",
                 {"gap_days": gap_days, "titles": titles},
             )
         else:
             result.add(
                 "wayback.recycled", "high",
-                f"re-registered domain: archive.org has content from {years_txt}, "
-                f"{gap_days} days before the current registration",
+                f"домен перерегистрирован: в archive.org есть контент за {years_txt}, "
+                f"это на {gap_days} дн. раньше текущей регистрации",
                 {"gap_days": gap_days, "titles": titles},
             )
     else:
         age_days = days_between(now, first_ts)
         if len(rows) >= 20 and age_days > 730:
             result.add("wayback.long_history", "info",
-                       f"{len(rows)} archived snapshots since "
-                       f"{result.data['first_seen_date']} — consistent history")
+                       f"{len(rows)} снимков в архиве с {result.data['first_seen_date']} — "
+                       "история ровная")
         else:
             result.add("wayback.short_history", "info",
-                       f"{len(rows)} archived snapshots since "
-                       f"{result.data['first_seen_date']}")
+                       f"{len(rows)} снимков в архиве с {result.data['first_seen_date']}")
 
     # A history made almost entirely of redirects is a doorway-domain pattern.
     redirects = sum(v for k, v in status_counts.items() if k.startswith("3"))
     if len(rows) >= 10 and redirects / len(rows) > 0.6:
         result.add("wayback.mostly_redirects", "medium",
-                   f"{redirects}/{len(rows)} archived responses were redirects — "
-                   "the domain has mostly been used to bounce traffic elsewhere",
+                   f"{redirects} из {len(rows)} снимков — редиректы. Домен в основном "
+                   "использовали, чтобы перебрасывать трафик дальше",
                    {"redirects": redirects, "total": len(rows)})
 
     return result

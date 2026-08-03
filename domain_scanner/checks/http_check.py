@@ -193,11 +193,11 @@ def check_http(ctx: ScanContext) -> CheckResult:
         except Exception as exc2:  # noqa: BLE001
             result.data = {"https_error": https_error, "http_error": str(exc2)}
             result.add("http.unreachable", "critical",
-                       f"the site does not load over HTTPS or HTTP ({https_error})")
+                       f"сайт не открывается ни по HTTPS, ни по HTTP ({https_error})")
             return result
         result.add("http.no_https", "high",
-                   f"HTTPS fails ({https_error}) — Google Ads will not run traffic to a "
-                   "destination without working TLS")
+                   f"HTTPS не работает ({https_error}) — Google Ads не пустит трафик на сайт "
+                   "без рабочего сертификата")
     data["https_error"] = https_error
 
     body = primary["body"]
@@ -217,11 +217,11 @@ def check_http(ctx: ScanContext) -> CheckResult:
 
     if primary["status"] >= 500:
         result.add("http.server_error", "critical",
-                   f"server error: HTTP {primary['status']}")
+                   f"ошибка сервера: HTTP {primary['status']}")
     elif primary["status"] >= 400:
         result.add("http.client_error", "critical",
-                   f"the page returns HTTP {primary['status']} — a broken destination "
-                   "is an automatic policy problem")
+                   f"страница отдаёт HTTP {primary['status']} — нерабочая посадочная это "
+                   "автоматический залёт по правилам")
 
     # --- redirects off the advertised domain ---
     try:
@@ -231,12 +231,12 @@ def check_http(ctx: ScanContext) -> CheckResult:
     data["final_domain"] = final_domain
     if final_domain and final_domain != ctx.domain:
         result.add("http.offsite_redirect", "high",
-                   f"redirects to a different domain ({final_domain}) — the advertised "
-                   "domain and the destination must match",
+                   f"редиректит на другой домен ({final_domain}) — рекламируемый домен и "
+                   "фактический должны совпадать",
                    {"final": final_domain, "chain": primary["chain"]})
     if len(primary["chain"]) > 4:
         result.add("http.long_redirect_chain", "low",
-                   f"{len(primary['chain']) - 1} redirects before the page loads",
+                   f"до загрузки страницы {len(primary['chain']) - 1} редиректа",
                    {"chain": primary["chain"]})
 
     meta_refresh = META_REFRESH_RE.search(body[:100_000])
@@ -244,7 +244,7 @@ def check_http(ctx: ScanContext) -> CheckResult:
     if meta_refresh:
         data["meta_refresh"] = meta_refresh.group(1)[:200]
         result.add("http.meta_refresh", "medium",
-                   "page uses a meta-refresh redirect", {"content": data["meta_refresh"]})
+                   "на странице редирект через meta-refresh", {"content": data["meta_refresh"]})
     if js_redirect:
         target = js_redirect.group(1)
         try:
@@ -254,7 +254,7 @@ def check_http(ctx: ScanContext) -> CheckResult:
         data["js_redirect"] = target[:200]
         if target_domain and target_domain != ctx.domain:
             result.add("http.js_offsite_redirect", "high",
-                       f"JavaScript redirects users to {target_domain}",
+                       f"JavaScript уводит пользователя на {target_domain}",
                        {"target": target[:200]})
 
     # --- thin content ---
@@ -263,14 +263,14 @@ def check_http(ctx: ScanContext) -> CheckResult:
     if primary["status"] < 400:
         if text_len < 200:
             result.add("http.thin_content", "high",
-                       f"almost no visible text ({text_len} chars) — reads as a blank or "
-                       "placeholder page")
+                       f"видимого текста почти нет ({text_len} символов) — выглядит как пустая "
+                       "или временная страница")
         elif text_len < 800:
             result.add("http.light_content", "low",
-                       f"very little content ({text_len} chars of visible text)")
+                       f"мало контента ({text_len} символов видимого текста)")
 
     if not title:
-        result.add("http.no_title", "low", "page has no <title>")
+        result.add("http.no_title", "low", "у страницы нет заголовка <title>")
 
     # --- trust pages ---
     policies = find_policy_pages(body, primary["final_url"])
@@ -279,12 +279,12 @@ def check_http(ctx: ScanContext) -> CheckResult:
     if primary["status"] < 400:
         if len(missing) == 3:
             result.add("http.no_trust_pages", "high",
-                       "no privacy policy, terms or contact page — the exact gap that "
-                       "sends an account into business verification",
+                       "нет ни политики конфиденциальности, ни условий, ни контактов — именно из-за "
+                       "этого аккаунт чаще всего улетает на верификацию бизнеса",
                        {"missing": missing})
         elif missing:
             result.add("http.missing_trust_pages", "medium",
-                       f"missing trust pages: {', '.join(missing)}", {"missing": missing})
+                       f"не хватает страниц доверия: {', '.join(missing)}", {"missing": missing})
 
     # --- ad/analytics tags (used later for cross-domain footprint linking) ---
     trackers = detect_trackers(body)
@@ -302,11 +302,11 @@ def check_http(ctx: ScanContext) -> CheckResult:
                 "san_count": len(tls["subject_alt_names"]),
             }
             if tls["expires"] and tls["expires"] < time.time():
-                result.add("http.tls_expired", "critical", "TLS certificate has expired")
+                result.add("http.tls_expired", "critical", "сертификат TLS просрочен")
             if len(tls["subject_alt_names"]) > 50:
                 result.add("http.shared_cert", "low",
-                           f"certificate covers {len(tls['subject_alt_names'])} hostnames — "
-                           "a shared hosting certificate",
+                           f"сертификат выписан на {len(tls['subject_alt_names'])} имён — это общий "
+                           "сертификат шаред-хостинга",
                            {"san_count": len(tls["subject_alt_names"])})
         except Exception as exc:  # noqa: BLE001
             data["tls_error"] = f"{type(exc).__name__}: {exc}"
@@ -314,8 +314,8 @@ def check_http(ctx: ScanContext) -> CheckResult:
     result.data = data
     if not [f for f in result.findings if (f.weight or 0) > 0]:
         result.add("http.ok", "info",
-                   f"loads over HTTPS ({primary['status']}), "
-                   f"{len(policies)} trust pages found")
+                   f"открывается по HTTPS ({primary['status']}), страниц доверия найдено: "
+                   f"{len(policies)}")
     return result
 
 
@@ -355,23 +355,23 @@ def check_cloaking(ctx: ScanContext) -> CheckResult:
         if "error" in info:
             if ua in ("googlebot", "adsbot"):
                 result.add(f"cloaking.{ua}_blocked", "high",
-                           f"the site fails to respond to the {ua} user-agent "
-                           f"({info['error']}) — Google cannot crawl the destination",
+                           f"сайт не отвечает на User-Agent {ua} ({info['error']}) — Google не может "
+                           "просканировать посадочную",
                            {"ua": ua})
             continue
         if ua == "mobile":
             continue
         if info["status"] >= 400:
             result.add(f"cloaking.{ua}_error", "high",
-                       f"returns HTTP {info['status']} to {ua} but loads for a browser",
+                       f"для {ua} отдаёт HTTP {info['status']}, а для браузера открывается",
                        {"ua": ua, "status": info["status"]})
         elif info["fingerprint"] != baseline_fp:
             result.add("cloaking.content_differs", "high",
-                       f"serves different content to {ua} than to a browser — this is the "
-                       "pattern automated review flags",
+                       f"для {ua} отдаёт не тот контент, что браузеру — именно на это срабатывает "
+                       "автоматическая проверка Google",
                        {"ua": ua, "browser_fp": baseline_fp, "crawler_fp": info["fingerprint"]})
 
     if not [f for f in result.findings if (f.weight or 0) > 0]:
         result.add("cloaking.consistent", "info",
-                   "browser, Googlebot and AdsBot all receive the same page")
+                   "браузер, Googlebot и AdsBot получают одну и ту же страницу")
     return result

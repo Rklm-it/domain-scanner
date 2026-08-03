@@ -80,14 +80,14 @@ def test_json_output_written(patched, tmp_path, capsys):
 def test_csv_output_written(patched, tmp_path):
     out = tmp_path / "r.csv"
     cli.main(["good.com", "--csv", str(out), "--no-color"])
-    assert out.read_text().startswith("domain,score,verdict")
+    assert out.read_text().startswith("домен,счёт,вердикт")
 
 
 def test_markdown_output_written(patched, tmp_path):
     out = tmp_path / "r.md"
     cli.main(["good.com", "bad.com", "--markdown", str(out), "--footprint", "--no-color"])
     text = out.read_text()
-    assert "# Domain scan" in text
+    assert "# Скан доменов" in text
     assert "bad.com" in text
 
 

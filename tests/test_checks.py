@@ -142,7 +142,7 @@ def test_blocklists_decodes_spamhaus(ctx_factory):
     })
     result = check_blocklists(ctx_factory(resolver=resolver))
     assert "blocklist.listed" in codes(result)
-    assert result.data["listings"]["Spamhaus DBL"] == ["phishing domain"]
+    assert result.data["listings"]["Spamhaus DBL"] == ["фишинг"]
 
 
 def test_blocklists_multiple_hits_are_critical(ctx_factory):
@@ -211,7 +211,7 @@ def test_subscriber_key_switches_to_the_dqs_zone(ctx_factory, monkeypatch):
     })
     result = check_blocklists(ctx_factory(resolver=resolver))
     assert "Spamhaus DBL" in result.data["zones_using_key"]
-    assert result.data["listings"]["Spamhaus DBL"] == ["phishing domain"]
+    assert result.data["listings"]["Spamhaus DBL"] == ["фишинг"]
 
 
 def test_no_key_uses_the_public_zone(ctx_factory, monkeypatch):

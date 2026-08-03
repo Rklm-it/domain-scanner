@@ -93,7 +93,7 @@ def check_hosting(ctx: ScanContext) -> CheckResult:
         hit = next((s for s in SUSPECT_ASN_NAMES if s in low), None)
         if hit:
             result.add("hosting.suspect_network", "medium",
-                       f"hosted on a network with a heavy abuse history ({name})",
+                       f"хостится в сети с тяжёлой историей абуза ({name})",
                        {"as_name": name})
             break
 
@@ -102,7 +102,7 @@ def check_hosting(ctx: ScanContext) -> CheckResult:
 
     if behind_cdn:
         result.add("hosting.behind_cdn", "info",
-                   f"behind {', '.join(result.data['cdn'])} — origin network is hidden")
+                   f"за {', '.join(result.data['cdn'])} — реальный хостинг скрыт")
     else:
         # Only meaningful when the IP is the real origin.
         neighbours = (
@@ -113,15 +113,15 @@ def check_hosting(ctx: ScanContext) -> CheckResult:
             result.data["neighbours_sample"] = neighbours[:15]
             if len(neighbours) >= ctx.config.crowded_ip_domains:
                 result.add("hosting.crowded_ip", "medium",
-                           f"{len(neighbours)} other domains share {ips[0]} — bulk shared "
-                           "hosting, so you inherit the neighbours' reputation",
+                           f"на {ips[0]} сидит ещё {len(neighbours)} доменов — массовый шаред-хостинг, "
+                           "репутация соседей переходит на тебя",
                            {"count": len(neighbours), "ip": ips[0]})
             elif len(neighbours) > 1:
                 result.add("hosting.shared_ip", "info",
-                           f"{len(neighbours)} domains share {ips[0]}",
+                           f"на {ips[0]} сидит доменов: {len(neighbours)}",
                            {"count": len(neighbours)})
 
     if not result.findings:
         as_label = names[0] if names else ", ".join(sorted(a for a in asns if a))
-        result.add("hosting.ok", "info", f"hosted on {as_label}")
+        result.add("hosting.ok", "info", f"хостится в {as_label}")
     return result

@@ -43,12 +43,12 @@ def check_dns(ctx: ScanContext) -> CheckResult:
     ctx.set("ns", ns_records)
 
     if not ns_records:
-        result.add("dns.no_ns", "high", "domain has no nameservers — it is not delegated")
+        result.add("dns.no_ns", "high", "у домена нет NS-серверов — он не делегирован")
         return result
 
     if not ips and not aaaa_records:
         result.add("dns.no_address", "high",
-                   "delegated but has no A/AAAA record — nothing is hosted here")
+                   "домен делегирован, но A-записи нет — на нём ничего не размещено")
 
     parking = [
         p for p in ctx.config.registrars.get("parking_ns", [])
@@ -56,7 +56,7 @@ def check_dns(ctx: ScanContext) -> CheckResult:
     ]
     if parking:
         result.add("dns.parked", "high",
-                   f"nameservers belong to a domain-parking service ({parking[0]})",
+                   f"NS-серверы принадлежат парковочному сервису ({parking[0]})",
                    {"ns": ns_records})
 
     free_host = [
@@ -65,24 +65,24 @@ def check_dns(ctx: ScanContext) -> CheckResult:
     ]
     if free_host:
         result.add("dns.free_hosting", "medium",
-                   f"nameservers point at free hosting ({free_host[0]})", {"ns": ns_records})
+                   f"NS-серверы указывают на бесплатный хостинг ({free_host[0]})", {"ns": ns_records})
 
     if len(ns_records) == 1:
         result.add("dns.single_ns", "low",
-                   "only one nameserver — unusual for a real business site")
+                   "всего один NS-сервер — для настоящего бизнеса нетипично")
 
     if not mx_records:
         result.add("dns.no_mx", "low",
-                   "no MX record — no email on the domain, a signal reviewers use to "
-                   "separate real businesses from pure landing pages")
+                   "нет MX-записи — на домене не настроена почта. По этому признаку "
+                   "отличают работающий бизнес от чистого ленда")
     if not spf:
-        result.add("dns.no_spf", "info", "no SPF record")
+        result.add("dns.no_spf", "info", "нет SPF-записи")
     if not dmarc:
-        result.add("dns.no_dmarc", "info", "no DMARC record")
+        result.add("dns.no_dmarc", "info", "нет DMARC-записи")
 
     # A domain with mail, SPF and DMARC configured reads as an operating business.
     if mx_records and spf and dmarc:
         result.add("dns.business_email", "info",
-                   "MX + SPF + DMARC all present — looks like an operating business")
+                   "MX, SPF и DMARC на месте — похоже на работающий бизнес")
 
     return result

@@ -90,6 +90,9 @@ def test_health_reports_degraded_connectivity(tmp_path, scan_stub, monkeypatch):
     monkeypatch.setattr("domain_scanner.preflight.probe_dns", lambda *a, **k: (True, "ok"))
     app = create_app(db_path=str(tmp_path / "d.db"), config=Config.from_env(), token="")
     with TestClient(app) as c:
+        # The probe runs on a background thread so the socket binds immediately;
+        # wait for it to land before asserting on what it found.
+        assert app.state.monitor.wait_ready(5), "probe never completed"
         body = c.get("/api/health").json()
         assert body["status"] == "degraded"
         assert body["connectivity"]["http"] is False
@@ -204,8 +207,8 @@ def test_scan_list_includes_worst_score(client):
 
 @pytest.mark.parametrize("fmt,marker", [
     ("json", '"domains"'),
-    ("csv", "domain,score,verdict"),
-    ("md", "# Domain scan"),
+    ("csv", "домен,счёт,вердикт"),
+    ("md", "# Скан доменов"),
 ])
 def test_export_formats(client, fmt, marker):
     scan_id = client.post("/api/scans", json={"domains": ["a.com", "b.com"]}).json()["scan_id"]

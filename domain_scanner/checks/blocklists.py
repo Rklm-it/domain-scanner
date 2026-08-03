@@ -57,15 +57,15 @@ ZONES: tuple[Zone, ...] = (
         keyed_zone="{key}.dbl.dq.spamhaus.net",
         test_point="dbltest.com",
         codes={
-            "127.0.1.2": "spam domain",
-            "127.0.1.4": "phishing domain",
-            "127.0.1.5": "malware domain",
-            "127.0.1.6": "botnet C&C domain",
-            "127.0.1.102": "abused legit spam",
-            "127.0.1.103": "abused spammed redirector",
-            "127.0.1.104": "abused legit phish",
-            "127.0.1.105": "abused legit malware",
-            "127.0.1.106": "abused legit botnet",
+            "127.0.1.2": "спам",
+            "127.0.1.4": "фишинг",
+            "127.0.1.5": "малварь",
+            "127.0.1.6": "управляющий сервер ботнета",
+            "127.0.1.102": "взломанный легальный, спам",
+            "127.0.1.103": "взломанный редиректор",
+            "127.0.1.104": "взломанный легальный, фишинг",
+            "127.0.1.105": "взломанный легальный, малварь",
+            "127.0.1.106": "взломанный легальный, ботнет",
         },
     ),
     Zone(
@@ -73,10 +73,10 @@ ZONES: tuple[Zone, ...] = (
         zone="multi.surbl.org",
         test_point="test.surbl.org",
         codes={
-            "127.0.0.8": "phishing (PH)",
-            "127.0.0.16": "malware (MW)",
-            "127.0.0.64": "abuse (ABUSE)",
-            "127.0.0.128": "cracked (CR)",
+            "127.0.0.8": "фишинг (PH)",
+            "127.0.0.16": "малварь (MW)",
+            "127.0.0.64": "абуз (ABUSE)",
+            "127.0.0.128": "взломан (CR)",
         },
     ),
     Zone(
@@ -86,15 +86,15 @@ ZONES: tuple[Zone, ...] = (
         keyed_zone="{key}.multi.uribl.com",
         test_point="test.uribl.com",
         codes={
-            "127.0.0.2": "black",
-            "127.0.0.4": "grey",
-            "127.0.0.8": "red",
+            "127.0.0.2": "чёрный список",
+            "127.0.0.4": "серый список",
+            "127.0.0.8": "красный список",
         },
     ),
     Zone(label="SEM URIBL", zone="uribl.spameatingmonkey.net",
-         codes={"127.0.0.2": "listed"}),
+         codes={"127.0.0.2": "числится"}),
     Zone(label="SEM FRESH", zone="fresh.spameatingmonkey.net",
-         codes={"127.0.0.2": "registered in the last days"}),
+         codes={"127.0.0.2": "зарегистрирован на днях"}),
 )
 
 # Zone availability depends on the resolver, not on the domain being scanned,
@@ -161,7 +161,7 @@ def _decode(zone: Zone, answers: list[str]) -> tuple[list[str], bool]:
                     if bits & int(code.rsplit(".", 1)[-1]):
                         reasons.append(meaning)
             if not reasons:
-                reasons.append(f"listed ({ans})")
+                reasons.append(f"числится ({ans})")
     return sorted(set(reasons)), rejected
 
 
@@ -214,7 +214,7 @@ def check_blocklists(ctx: ScanContext) -> CheckResult:
         result.add(
             "blocklist.fresh" if fresh_only else "blocklist.listed",
             severity,
-            f"listed on {label}: {', '.join(reasons)}",
+            f"числится в {label}: {', '.join(reasons)}",
             {"zone": label, "reasons": reasons},
         )
 
@@ -222,22 +222,21 @@ def check_blocklists(ctx: ScanContext) -> CheckResult:
     if stale:
         result.add(
             "blocklist.unavailable", "info",
-            f"no answer from {', '.join(stale)} — these lists refuse queries from public "
-            "resolvers (8.8.8.8, 1.1.1.1). Either point --nameserver "
-            "(SCANNER_NAMESERVER) at a resolver that does its own recursion, or set a "
-            "free subscriber key (SPAMHAUS_DQS_KEY / URIBL_KEY). Until then these lists "
-            "are not being consulted at all.",
+            f"нет ответа от {', '.join(stale)} — эти списки не отвечают публичным резолверам "
+            "(8.8.8.8, 1.1.1.1). Нужен либо свой рекурсивный резолвер в SCANNER_NAMESERVER, "
+            "либо бесплатный ключ (SPAMHAUS_DQS_KEY / URIBL_KEY). Пока их нет, эти списки "
+            "не опрашиваются вообще.",
             {"zones": stale},
         )
 
     if not listings:
         if verified:
             result.add("blocklist.clean", "info",
-                       f"not listed on {', '.join(verified)}")
+                       f"не числится в {', '.join(verified)}")
         else:
             # No zone was confirmed to be answering. Saying "clean" here would
             # mean "we did not look".
             result.add("blocklist.no_data", "info",
-                       "no blocklist could be confirmed as answering — this domain "
-                       "was not actually checked against any list")
+                       "ни один блоклист не подтвердил, что отвечает — по спискам домен "
+                       "фактически не проверялся")
     return result

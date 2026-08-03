@@ -72,7 +72,7 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
     ip_pairs = [(ip, r.domain) for r in usable for ip in (r.data("dns", "a") or [])]
     for ip, domains in _group(ip_pairs).items():
         add("ip", ip, domains, escalate("high", domains),
-            f"{len(domains)}/{total} domains resolve to the same IP {ip}")
+            f"{len(domains)} из {total} доменов сидят на одном IP {ip}")
 
     asn_pairs = [
         (str(n.get("asn")), r.domain)
@@ -83,7 +83,7 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
     for asn, domains in _group(asn_pairs).items():
         if len(domains) == total and total > 2:
             add("asn", f"AS{asn}", domains, "low",
-                f"all {total} domains sit in AS{asn} — same hosting network")
+                f"все {total} доменов в AS{asn} — одна хостинг-сеть")
 
     ns_pairs = [
         (provider, r.domain)
@@ -95,7 +95,7 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
             "cloudflare.com", "awsdns-01.org", "googledomains.com"
         ):
             add("ns", provider, domains, "low",
-                f"all {total} domains use the same nameserver operator ({provider})")
+                f"у всех {total} доменов один NS-оператор ({provider})")
 
     # --- registration ---
     reg_pairs = [
@@ -106,7 +106,7 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
     for registrar, domains in _group(reg_pairs).items():
         if len(domains) == total and total > 2:
             add("registrar", registrar, domains, "low",
-                f"all {total} domains were bought from {registrar}")
+                f"все {total} доменов куплены у {registrar}")
 
     day_pairs = []
     for r in usable:
@@ -116,7 +116,7 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
             day_pairs.append((day, r.domain))
     for day, domains in _group(day_pairs).items():
         add("registration_date", day, domains, escalate("medium", domains),
-            f"{len(domains)}/{total} domains were registered on the same day ({day})")
+            f"{len(domains)} из {total} доменов зарегистрированы в один день ({day})")
 
     # --- content and tracking ---
     fp_pairs = [
@@ -126,7 +126,7 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
     ]
     for fingerprint, domains in _group(fp_pairs).items():
         add("content", fingerprint, domains, escalate("high", domains),
-            f"{len(domains)}/{total} domains serve a byte-identical landing page")
+            f"{len(domains)} из {total} доменов отдают побайтово одинаковый ленд")
 
     title_pairs = [
         (str(r.data("http", "title")), r.domain)
@@ -136,7 +136,7 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
     for title, domains in _group(title_pairs).items():
         if not any(l.kind == "content" and set(domains) <= set(l.domains) for l in links):
             add("title", title, domains, "medium",
-                f"{len(domains)}/{total} domains share the page title \"{title[:60]}\"")
+                f"у {len(domains)} из {total} доменов одинаковый заголовок страницы «{title[:60]}»")
 
     tracker_pairs = []
     for r in usable:
@@ -145,8 +145,8 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
                 tracker_pairs.append((f"{network}:{tracker_id}", r.domain))
     for tracker, domains in _group(tracker_pairs).items():
         add("tracker", tracker, domains, escalate("high", domains),
-            f"{len(domains)}/{total} domains share the tracking ID {tracker} — "
-            "an explicit link between the properties")
+            f"{len(domains)} из {total} доменов используют один счётчик {tracker} — "
+            "это прямая связка между ними")
 
     severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     links.sort(key=lambda l: (severity_rank.get(l.severity, 9), -len(l.domains)))
@@ -155,6 +155,6 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
 
 def summarize(links: list[Link], reports: list[DomainReport]) -> str:
     if not links:
-        return "No shared footprint detected across the batch."
+        return "Общего следа по пачке не обнаружено."
     worst = links[0]
-    return f"{len(links)} shared attribute(s); strongest link: {worst.message}"
+    return f"общих признаков: {len(links)}; самый сильный — {worst.message}"

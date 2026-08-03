@@ -73,27 +73,27 @@ def check_naming(ctx: ScanContext) -> CheckResult:
 
     if hyphens >= 3:
         result.add("naming.many_hyphens", "medium",
-                   f"{hyphens} hyphens in the name — typical of throwaway/spun domains",
+                   f"{hyphens} дефиса в имени — так выглядят одноразовые домены",
                    {"hyphens": hyphens})
     elif hyphens == 2:
-        result.add("naming.hyphens", "low", "2 hyphens in the name", {"hyphens": hyphens})
+        result.add("naming.hyphens", "low", "2 дефиса в имени", {"hyphens": hyphens})
 
     if digits >= 4:
         result.add("naming.many_digits", "low",
-                   f"{digits} digits in the name", {"digits": digits})
+                   f"{digits} цифры в имени", {"digits": digits})
 
     if len(sld) > 25:
         result.add("naming.very_long", "low",
-                   f"unusually long name ({len(sld)} chars)", {"length": len(sld)})
+                   f"необычно длинное имя ({len(sld)} символов)", {"length": len(sld)})
 
     if looks_random(sld):
         result.add("naming.random_looking", "medium",
-                   "name looks machine-generated (low vowel ratio / high entropy)",
+                   "имя выглядит сгенерированным машиной (мало гласных, высокая энтропия)",
                    {"entropy": round(shannon_entropy(sld), 2)})
 
     if sld.startswith("xn--"):
         result.add("naming.punycode", "medium",
-                   "internationalised (punycode) domain — a known homograph vector",
+                   "домен в punycode — типовой способ подделки под чужое имя",
                    {"sld": sld})
 
     hits = {"sensitive": [], "scam_pattern": [], "brand": []}
@@ -110,10 +110,10 @@ def check_naming(ctx: ScanContext) -> CheckResult:
 
     if is_official:
         result.add("naming.official_brand", "info",
-                   f"{ctx.domain} is the brand's own domain")
+                   f"{ctx.domain} — официальный домен самого бренда")
     elif hits["brand"]:
         result.add("naming.brand_lookalike", "high",
-                   f"contains a frequently-impersonated brand name: {', '.join(hits['brand'])}",
+                   f"в имени чужой бренд, под который часто подделываются: {', '.join(hits['brand'])}",
                    {"matches": hits["brand"]})
     else:
         # Near-miss typosquats: edit distance 1-2 from a brand of similar length.
@@ -125,20 +125,20 @@ def check_naming(ctx: ScanContext) -> CheckResult:
         if near:
             result.data["typosquat_of"] = near
             result.add("naming.typosquat", "high",
-                       f"one or two edits away from {', '.join(near[:3])} — reads as a typosquat",
+                       f"отличается на одну-две буквы от {', '.join(near[:3])} — читается как подделка",
                        {"matches": near})
 
     if hits["sensitive"]:
         result.add("naming.sensitive_vertical", "low",
-                   f"names a restricted vertical: {', '.join(hits['sensitive'])}",
+                   f"в имени регулируемая вертикаль: {', '.join(hits['sensitive'])}",
                    {"matches": hits["sensitive"]})
 
     if hits["scam_pattern"]:
         sev = "medium" if len(hits["scam_pattern"]) >= 2 else "low"
         result.add("naming.spammy_words", sev,
-                   f"contains funnel/urgency wording: {', '.join(hits['scam_pattern'])}",
+                   f"слова из воронок и давилок: {', '.join(hits['scam_pattern'])}",
                    {"matches": hits["scam_pattern"]})
 
     if not result.findings:
-        result.add("naming.clean", "info", "name reads as an ordinary brand")
+        result.add("naming.clean", "info", "имя читается как обычный бренд")
     return result

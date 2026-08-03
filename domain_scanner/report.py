@@ -75,8 +75,8 @@ def render_summary(reports: list[DomainReport], paint: Painter) -> str:
     rows = sorted(reports, key=lambda r: -r.score)
     name_width = max([len(r.domain) for r in rows] + [10])
     verdict_width = max([len(r.verdict) for r in rows] + [7])
-    out = [paint.bold(f"{'DOMAIN'.ljust(name_width)}  SCORE  "
-                      f"{'VERDICT'.ljust(verdict_width)}  TOP ISSUE")]
+    out = [paint.bold(f"{'ДОМЕН'.ljust(name_width)}  СЧЁТ  "
+                      f"{'ВЕРДИКТ'.ljust(verdict_width)}  ГЛАВНАЯ ПРОБЛЕМА")]
     for r in rows:
         top = r.top_findings(1)
         issue = top[0].message if top else "-"
@@ -99,15 +99,15 @@ def render_report(report: DomainReport, paint: Painter, verbose: bool = False) -
     conf = confidence(report)
     if conf < 1.0:
         missing = ", ".join(report.unavailable_checks) or "none"
-        note = "" if conf >= 0.75 else "  <- treat this verdict as provisional"
-        lines.append(f"  confidence {int(conf * 100)}% "
-                     f"(no data from: {missing}){note}")
+        note = "" if conf >= 0.75 else "  <- вердикт предварительный"
+        lines.append(f"  покрытие {int(conf * 100)}% "
+                     f"(нет данных от: {missing}){note}")
 
     shown = [f for f in report.findings if (f.weight or 0) > 0 or verbose]
     order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     shown.sort(key=lambda f: (order.get(f.severity, 9), f.code))
     if not shown:
-        lines.append("  no findings")
+        lines.append("  находок нет")
     for f in shown:
         mark = SEVERITY_MARK.get(f.severity, " ?")
         lines.append(f"  {paint.severity(f.severity, mark)} {f.message}")
@@ -116,7 +116,7 @@ def render_report(report: DomainReport, paint: Painter, verbose: bool = False) -
             lines.append(f"       {detail[:300]}")
 
     if verbose:
-        lines.append("  " + paint.bold("check status:"))
+        lines.append("  " + paint.bold("статус проверок:"))
         for c in report.checks:
             status = c.status if c.status == "ok" else f"{c.status} ({c.error})"
             lines.append(f"    {c.name:<14} {status}  {c.duration_ms}ms")
@@ -125,8 +125,8 @@ def render_report(report: DomainReport, paint: Painter, verbose: bool = False) -
 
 def render_footprint(links: list[Link], paint: Painter) -> str:
     if not links:
-        return paint.bold("Shared footprint") + "\n  none detected — the domains look independent"
-    lines = [paint.bold("Shared footprint across the batch")]
+        return paint.bold("Общий след") + "\n  не найден — домены выглядят независимыми"
+    lines = [paint.bold("Общий след по пачке")]
     for link in links:
         mark = SEVERITY_MARK.get(link.severity, " ?")
         lines.append(f"  {paint.severity(link.severity, mark)} {link.message}")
@@ -144,9 +144,9 @@ def to_json(reports: list[DomainReport], links: list[Link] | None = None) -> str
 
 
 CSV_COLUMNS = [
-    "domain", "score", "verdict", "confidence", "age_days", "registrar", "tld_tier",
-    "recycled", "blocklisted", "safe_browsing", "vt_malicious", "http_status",
-    "final_domain", "trust_pages", "ip", "asn", "top_issues",
+    "домен", "счёт", "вердикт", "покрытие", "возраст_дней", "регистратор", "тир_зоны",
+    "перерегистрирован", "в_блоклистах", "safe_browsing", "vt_вредоносных", "http_код",
+    "конечный_домен", "страницы_доверия", "ip", "asn", "главные_проблемы",
 ]
 
 
@@ -158,33 +158,33 @@ def to_csv(reports: list[DomainReport]) -> str:
         networks = r.data("hosting", "networks") or []
         blocklist_hits = r.data("blocklists", "listings") or {}
         writer.writerow({
-            "domain": r.domain,
-            "score": r.score,
-            "verdict": r.verdict,
-            "confidence": confidence(r),
-            "age_days": r.data("rdap", "age_days", ""),
-            "registrar": r.data("rdap", "registrar", ""),
-            "tld_tier": r.data("tld", "tier", ""),
-            "recycled": r.data("wayback", "recycled", ""),
-            "blocklisted": "; ".join(blocklist_hits) if blocklist_hits else "",
+            "домен": r.domain,
+            "счёт": r.score,
+            "вердикт": r.verdict,
+            "покрытие": confidence(r),
+            "возраст_дней": r.data("rdap", "age_days", ""),
+            "регистратор": r.data("rdap", "registrar", ""),
+            "тир_зоны": r.data("tld", "tier", ""),
+            "перерегистрирован": r.data("wayback", "recycled", ""),
+            "в_блоклистах": "; ".join(blocklist_hits) if blocklist_hits else "",
             "safe_browsing": "; ".join(r.data("safebrowsing", "threat_types") or []),
-            "vt_malicious": r.data("virustotal", "malicious", ""),
-            "http_status": r.data("http", "status", ""),
-            "final_domain": r.data("http", "final_domain", ""),
-            "trust_pages": "; ".join((r.data("http", "policy_pages") or {}).keys()),
+            "vt_вредоносных": r.data("virustotal", "malicious", ""),
+            "http_код": r.data("http", "status", ""),
+            "конечный_домен": r.data("http", "final_domain", ""),
+            "страницы_доверия": "; ".join((r.data("http", "policy_pages") or {}).keys()),
             "ip": "; ".join(r.data("dns", "a") or []),
             "asn": "; ".join(sorted({str(n["asn"]) for n in networks if n.get("asn")})),
-            "top_issues": " | ".join(f.message for f in r.top_findings(3)),
+            "главные_проблемы": " | ".join(f.message for f in r.top_findings(3)),
         })
     return buf.getvalue()
 
 
 def to_markdown(reports: list[DomainReport], links: list[Link] | None = None) -> str:
     rows = sorted(reports, key=lambda r: -r.score)
-    out = ["# Domain scan", "",
+    out = ["# Скан доменов", "",
            f"_{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}, "
-           f"{len(rows)} domain(s)_", "",
-           "| Domain | Score | Verdict | Top issue |",
+           f"доменов: {len(rows)}_", "",
+           "| Домен | Счёт | Вердикт | Главная проблема |",
            "| --- | ---: | --- | --- |"]
     for r in rows:
         top = r.top_findings(1)
@@ -195,12 +195,12 @@ def to_markdown(reports: list[DomainReport], links: list[Link] | None = None) ->
         out.append(f"## {r.domain} — {r.score}/100 {r.verdict}")
         findings = [f for f in r.findings if (f.weight or 0) > 0]
         if not findings:
-            out.append("No findings.")
+            out.append("Находок нет.")
         for f in sorted(findings, key=lambda f: -(f.weight or 0)):
             out.append(f"- **{f.severity}** · `{f.code}` — {f.message}")
         out.append("")
     if links:
-        out.append("## Shared footprint")
+        out.append("## Общий след")
         for link in links:
             out.append(f"- **{link.severity}** — {link.message}  \n  "
                        f"`{', '.join(link.domains)}`")

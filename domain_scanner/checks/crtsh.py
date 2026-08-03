@@ -45,7 +45,7 @@ def check_crtsh(ctx: ScanContext) -> CheckResult:
     text = resp.text.strip()
     if not text:
         result.data = {"certificates": 0}
-        result.add("crtsh.none", "info", "no certificates in CT logs")
+        result.add("crtsh.none", "info", "в CT-логах сертификатов нет")
         return result
     try:
         entries = resp.json()
@@ -55,7 +55,7 @@ def check_crtsh(ctx: ScanContext) -> CheckResult:
     if not entries:
         result.data = {"certificates": 0}
         result.add("crtsh.none", "low",
-                   "no certificate in CT logs — the domain has never served HTTPS")
+                   "в CT-логах сертификатов нет — домен никогда не работал по HTTPS")
         return result
 
     names: set[str] = set()
@@ -98,25 +98,25 @@ def check_crtsh(ctx: ScanContext) -> CheckResult:
         if gap > ctx.config.recycle_gap_days:
             result.add(
                 "crtsh.predates_registration", "high",
-                f"certificates exist from {result.data['first_cert_date']}, {gap} days before "
-                "the current registration — the domain was live under a previous owner",
+                f"сертификаты есть с {result.data['first_cert_date']} — это на {gap} дн. раньше "
+                "текущей регистрации. Домен работал у прошлого владельца",
                 {"gap_days": gap},
             )
 
     days_live = result.data["days_since_first_cert"]
     if days_live <= 7:
         result.add("crtsh.just_went_live", "medium",
-                   f"first certificate issued {days_live} days ago — the domain went live "
-                   "this week", {"days": days_live})
+                   f"первый сертификат выпущен {days_live} дн. назад — домен ожил буквально "
+                   "на этой неделе", {"days": days_live})
 
     if len(subdomains) >= 40:
         result.add("crtsh.many_subdomains", "medium",
-                   f"{len(subdomains)} distinct subdomains in CT logs — typical of a domain "
-                   "used to spin up many landers",
+                   f"{len(subdomains)} поддоменов в CT-логах — так выглядит домен, на котором "
+                   "клепали много лендов",
                    {"count": len(subdomains), "sample": subdomains[:15]})
 
     if not result.findings:
         result.add("crtsh.ok", "info",
-                   f"{len(entries)} certificates since {result.data['first_cert_date']}, "
-                   f"{len(subdomains)} subdomains")
+                   f"{len(entries)} сертификатов с {result.data['first_cert_date']}, "
+                   f"поддоменов: {len(subdomains)}")
     return result

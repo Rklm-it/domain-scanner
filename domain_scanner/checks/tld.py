@@ -35,9 +35,9 @@ def check_tld(ctx: ScanContext) -> CheckResult:
         result.add(
             "tld.high_abuse" if tier == 3 else "tld.elevated",
             severity,
-            f".{ctx.suffix} is a tier-{tier} TLD ({'high' if tier == 3 else 'elevated'} abuse rate)",
+            f"зона .{ctx.suffix} — {'высокий' if tier == 3 else 'повышенный'} уровень абуза (тир {tier})",
             {"tier": tier, "note": notes.get(str(tier), "")},
         )
     else:
-        result.add("tld.ok", "info", f".{ctx.suffix} is a low-abuse TLD (tier {tier})", {"tier": tier})
+        result.add("tld.ok", "info", f"зона .{ctx.suffix} — спокойная, абуза мало (тир {tier})", {"tier": tier})
     return result

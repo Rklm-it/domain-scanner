@@ -56,10 +56,10 @@ def check_safe_browsing(ctx: ScanContext) -> CheckResult:
 
     if matches:
         result.add("safebrowsing.flagged", "critical",
-                   f"Google Safe Browsing flags this domain: {', '.join(threats)}",
+                   f"Google Safe Browsing помечает домен: {', '.join(threats)}",
                    {"threat_types": threats})
     else:
-        result.add("safebrowsing.clean", "info", "clean in Google Safe Browsing")
+        result.add("safebrowsing.clean", "info", "в Google Safe Browsing чисто")
     return result
 
 
@@ -76,7 +76,7 @@ def check_virustotal(ctx: ScanContext) -> CheckResult:
     )
     if resp.status_code == 404:
         result.data = {"known": False}
-        result.add("virustotal.unknown", "info", "domain not present in VirusTotal")
+        result.add("virustotal.unknown", "info", "в VirusTotal домена нет")
         return result
     if resp.status_code == 401:
         return result.fail("VirusTotal rejected the API key")
@@ -105,19 +105,19 @@ def check_virustotal(ctx: ScanContext) -> CheckResult:
 
     if malicious >= 3:
         result.add("virustotal.malicious", "critical",
-                   f"{malicious} security vendors flag this domain as malicious",
+                   f"{malicious} антивирусных вендоров считают домен вредоносным",
                    {"malicious": malicious, "categories": categories})
     elif malicious >= 1:
         result.add("virustotal.some_detections", "high",
-                   f"{malicious} vendor(s) flag this domain",
+                   f"домен помечен вендорами: {malicious}",
                    {"malicious": malicious})
     elif suspicious >= 2:
         result.add("virustotal.suspicious", "medium",
-                   f"{suspicious} vendors mark this domain suspicious")
+                   f"{suspicious} вендоров считают домен подозрительным")
 
     if reputation <= -10:
         result.add("virustotal.bad_reputation", "medium",
-                   f"community reputation score {reputation}", {"reputation": reputation})
+                   f"репутация по оценкам сообщества: {reputation}", {"reputation": reputation})
 
     flagged_cats = {
         k: v for k, v in categories.items()
@@ -127,10 +127,10 @@ def check_virustotal(ctx: ScanContext) -> CheckResult:
     if flagged_cats:
         result.data["flagged_categories"] = flagged_cats
         result.add("virustotal.category", "low",
-                   f"categorised as: {', '.join(sorted(set(flagged_cats.values())))}",
+                   f"категории: {', '.join(sorted(set(flagged_cats.values())))}",
                    {"categories": flagged_cats})
 
     if not [f for f in result.findings if (f.weight or 0) > 0]:
         result.add("virustotal.clean", "info",
-                   f"clean across {sum(stats.values())} vendors")
+                   f"чисто у всех вендоров ({sum(stats.values())})")
     return result

@@ -110,7 +110,7 @@ def check_rdap(ctx: ScanContext) -> CheckResult:
     if payload.get("_not_found"):
         result.data = {"registered": False}
         result.add("rdap.not_registered", "info",
-                   "no RDAP record — domain may be unregistered or its TLD has no RDAP service")
+                   "нет записи RDAP — домен либо не зарегистрирован, либо у зоны нет RDAP")
         return result
 
     events = extract_events(payload)
@@ -143,50 +143,50 @@ def check_rdap(ctx: ScanContext) -> CheckResult:
     ctx.set("age_days", age_days)
 
     if age_days is None:
-        result.add("rdap.no_created_date", "info", "registry did not publish a creation date")
+        result.add("rdap.no_created_date", "info", "реестр не отдал дату регистрации")
     elif age_days <= ctx.config.fresh_domain_days:
         result.add("rdap.brand_new", "high",
-                   f"registered {age_days} days ago — brand new",
+                   f"зарегистрирован {age_days} дн. назад — совсем свежий",
                    {"age_days": age_days})
     elif age_days <= ctx.config.young_domain_days:
         result.add("rdap.young", "medium",
-                   f"registered {human_days(age_days)} ago — still young",
+                   f"зарегистрирован {human_days(age_days)} назад — ещё молодой",
                    {"age_days": age_days})
     elif age_days <= ctx.config.established_domain_days:
         result.add("rdap.under_a_year", "low",
-                   f"registered {human_days(age_days)} ago — under a year old",
+                   f"зарегистрирован {human_days(age_days)} назад — меньше года",
                    {"age_days": age_days})
     else:
         result.add("rdap.established", "info",
-                   f"registered {human_days(age_days)} ago", {"age_days": age_days})
+                   f"зарегистрирован {human_days(age_days)} назад", {"age_days": age_days})
 
     if expires_in is not None:
         if expires_in < 0:
             result.add("rdap.expired", "critical",
-                       f"registration expired {abs(expires_in)} days ago")
+                       f"регистрация истекла {abs(expires_in)} дн. назад")
         elif expires_in <= ctx.config.expiry_soon_days:
             result.add("rdap.expiring_soon", "medium",
-                       f"registration expires in {expires_in} days — a drop mid-campaign "
-                       "kills the account, not just the site",
+                       f"регистрация кончается через {expires_in} дн. — если домен отвалится посреди "
+                       "залива, ляжет не только сайт, но и аккаунт",
                        {"expires_in_days": expires_in})
         if created and expires:
             term_days = days_between(expires, created)
             result.data["term_days"] = term_days
             if term_days <= 400 and (age_days or 0) < 400:
                 result.add("rdap.one_year_term", "low",
-                           "registered for a single year — the throwaway default")
+                           "оплачен ровно на год — так берут одноразовые домены")
 
     for status in statuses:
         severity = BAD_STATUSES.get(status)
         if severity:
             result.add("rdap.bad_status", severity,
-                       f"registry status: {status}", {"status": status})
+                       f"статус в реестре: {status}", {"status": status})
 
     if registrar:
         low = registrar.lower()
         hits = [r for r in ctx.config.registrars.get("high_abuse", []) if r in low]
         if hits:
             result.add("rdap.abused_registrar", "low",
-                       f"registrar ({registrar}) is over-represented in abuse reporting",
+                       f"регистратор ({registrar}) часто светится в абуз-отчётах",
                        {"registrar": registrar})
     return result
