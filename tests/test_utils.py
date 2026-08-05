@@ -310,3 +310,73 @@ def test_extract_ignores_blank_lines_silently():
 def test_extract_does_not_split_a_url_path_into_a_second_domain():
     """"site.com/a/index.html" is one domain, not "site.com" plus "index.html"."""
     assert only("https://site.com/a/index.html") == ["site.com"]
+
+
+# ------------------------------- домен с пробелом внутри (артефакт вставки)
+#
+# Копирование URL из PDF, чата или отрендеренной страницы регулярно вставляет
+# пробел после точки: "https://www.leoslo. com/фывфыв". Для человека это тот же
+# домен, для парсера — мусор.
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("https://www.leoslo. com/фывфыв", "leoslo.com"),
+    ("https://pusteblume-auringen. de/", "pusteblume-auringen.de"),
+    ("www.example. com", "example.com"),
+    ("https://a. b. example. com/lp", "example.com"),          # сломана дважды
+    ("https://spaced. de/  — акк 3, живой", "spaced.de"),      # ещё и с пометкой
+    ("leoslo. com", "leoslo.com"),                             # без схемы вообще
+    ("shop . example . co.uk", "example.co.uk"),               # пробелы с двух сторон
+    ("пример. рф", "xn--e1afmkfd.xn--p1ai"),
+])
+def test_extract_repairs_a_space_inside_the_domain(line, expected):
+    assert only(line) == [expected]
+
+
+@pytest.mark.parametrize("prose", [
+    "Ленды на июль. Проверить всё завтра",
+    "Домен умер. Заменил на новый",
+    "конверт 3.5%. Дальше посмотрим",
+    "смотри в доке. Страница 12",
+])
+def test_repair_does_not_glue_a_full_stop_in_prose(prose):
+    """"Ленды на июль. Проверить" must not become июль.Проверить."""
+    assert extract_domains(prose)[0] == []
+
+
+@pytest.mark.parametrize("prose", [
+    "Проверить все.Завтра",
+    "Всё ок.Работает",
+    "Умер.Заменил",
+])
+def test_cyrillic_prose_without_a_space_is_not_a_domain(prose):
+    """A missing space after a full stop is the one case the shape cannot rule
+    out, so the Cyrillic zones are checked against the real, short list."""
+    assert extract_domains(prose)[0] == []
+
+
+@pytest.mark.parametrize("domain", ["пример.рф", "тест.москва", "сайт.онлайн"])
+def test_real_cyrillic_zones_still_work(domain):
+    assert extract_domains(domain)[0] == [normalize_input(domain)]
+
+
+def test_a_dot_in_a_url_path_is_left_alone():
+    """"foo.com/lp. Дальше" — the break is in the path, not the host."""
+    assert only("https://foo.com/lp. Дальше текст") == ["foo.com"]
+
+
+def test_the_screenshot_paste():
+    """Exactly what the operator pasted; two of the four used to be dropped."""
+    domains, unusable = extract_domains(
+        "https://jaiser-blechbearbeitung.com/\n"
+        "https://www.leoslo. com/фывфыв\n"
+        "https://pusteblume-auringen. de/\n"
+        "https://vegassigns.co.za/\n"
+    )
+    assert domains == [
+        "jaiser-blechbearbeitung.com",
+        "leoslo.com",
+        "pusteblume-auringen.de",
+        "vegassigns.co.za",
+    ]
+    assert unusable == []

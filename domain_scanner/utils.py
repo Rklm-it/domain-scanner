@@ -119,6 +119,20 @@ _DOMAIN_TOKEN_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Cyrillic zones that actually exist.
+#
+# The pattern above accepts any letters as a suffix, which is right for ASCII
+# -- there are well over a thousand gTLDs and no list here would stay current.
+# Cyrillic is different: the zones are a short closed set, and Cyrillic is also
+# the language the notes around these domains are written in. Without this,
+# a missing space after a full stop ("Всё ок.Работает") reads as a domain.
+CYRILLIC_TLDS = {
+    "рф", "рус", "москва", "дети", "онлайн", "сайт", "ком", "орг",
+    "бел", "укр", "срб", "мкд", "ею", "бг", "қаз", "мон", "католик",
+}
+
+_CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
+
 # Suffixes that match the pattern above but are file extensions, not zones.
 # Only entries IANA has never delegated belong here: .zip, .mov, .sh, .js,
 # .md, .py, .pl and .dev are all real TLDs and must keep working as domains.
@@ -131,6 +145,40 @@ NON_TLD_SUFFIXES = {
     "mp3", "mp4", "avi", "mkv", "wav", "flac", "webm",
     "log", "bak", "sql", "env",
 }
+
+
+# A dot inside a host with whitespace stuck to it: "https://www.leoslo. com/x".
+# Copying a URL out of a PDF, a chat or a rendered page does this routinely.
+#
+# The repair only fires behind a scheme or a "www.", and only up to the first
+# "/", "?" or "#". That is what keeps it away from ordinary prose, where a dot
+# followed by a space is a full stop and gluing it would invent a domain out of
+# "Ленды на июль. Проверить".
+_SPACED_DOT_IN_URL_RE = re.compile(
+    r"""
+    (
+      (?:[a-z][a-z0-9+.\-]*://|\bwww\.)   # the marker that says "this is a URL"
+      [^\s/?\#]*                          # the host, as far as it got
+    )
+    \s*\.\s+                              # the dot the paste broke
+    (?=[^\W\d_])                          # and a real label after it
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Whitespace hugging a dot, anywhere. Only ever applied to a whole line that
+# turns into exactly one domain and nothing else -- see extract_domains.
+_SPACED_DOT_RE = re.compile(r"\s*\.\s*")
+
+
+def _repair_spaced_dots(line: str) -> str:
+    """Close up "domain. com" inside URLs, leaving the rest of the line alone."""
+    for _ in range(8):  # a host can be broken more than once; bounded anyway
+        repaired = _SPACED_DOT_IN_URL_RE.sub(r"\1.", line)
+        if repaired == line:
+            return line
+        line = repaired
+    return line
 
 
 def extract_domains(text: str) -> tuple[list[str], list[tuple[str, str]]]:
@@ -153,22 +201,35 @@ def extract_domains(text: str) -> tuple[list[str], list[tuple[str, str]]]:
     unusable: list[tuple[str, str]] = []
     seen: set[str] = set()
 
+    def take(token: str) -> bool:
+        tail = token.rsplit(".", 1)[-1].split("/")[0]
+        if _CYRILLIC_RE.search(tail) and tail.lower() not in CYRILLIC_TLDS:
+            return False  # Russian prose, not a domain
+        try:
+            registrable, _sld, suffix = parse_domain(token)
+        except DomainParseError:
+            return False
+        if suffix.rsplit(".", 1)[-1] in NON_TLD_SUFFIXES:
+            return False  # a filename that happens to be shaped like a domain
+        if registrable not in seen:
+            seen.add(registrable)
+            domains.append(registrable)
+        return True
+
     for line in text.splitlines():
         body = line.split("#", 1)[0].strip()
         if not body:
             continue
+        # A line that *is* one domain once the stray spaces around its dots are
+        # closed up ("leoslo. com") is unambiguous, so it is tried first and
+        # wins outright. Safe because it has to match in full: a sentence keeps
+        # its other spaces and never does.
+        collapsed = _SPACED_DOT_RE.sub(".", body)
+        if _DOMAIN_TOKEN_RE.fullmatch(collapsed) and take(collapsed):
+            continue
         found = False
-        for match in _DOMAIN_TOKEN_RE.finditer(body):
-            try:
-                registrable, _sld, suffix = parse_domain(match.group(0))
-            except DomainParseError:
-                continue
-            if suffix.rsplit(".", 1)[-1] in NON_TLD_SUFFIXES:
-                continue  # a filename that happens to be shaped like a domain
-            found = True
-            if registrable not in seen:
-                seen.add(registrable)
-                domains.append(registrable)
+        for match in _DOMAIN_TOKEN_RE.finditer(_repair_spaced_dots(body)):
+            found |= take(match.group(0))
         if not found:
             unusable.append((body[:120], _why_no_domain(body)))
     return domains, unusable
