@@ -228,8 +228,20 @@ def extract_domains(text: str) -> tuple[list[str], list[tuple[str, str]]]:
         if _DOMAIN_TOKEN_RE.fullmatch(collapsed) and take(collapsed):
             continue
         found = False
+        # Once a URL with a path has been seen, later dotted tokens on the line
+        # are fragments of that path, not new domains -- a paste that broke the
+        # host also breaks the path, and ".../jquery.min.js" is domain-shaped
+        # because .js really is a TLD (Jersey). A token with its own scheme is
+        # a genuinely new URL and clears the state.
+        in_url_tail = False
         for match in _DOMAIN_TOKEN_RE.finditer(_repair_spaced_dots(body)):
-            found |= take(match.group(0))
+            token = match.group(0)
+            has_scheme = "://" in token
+            if in_url_tail and not has_scheme:
+                continue
+            if take(token):
+                found = True
+                in_url_tail = bool(set("/?#") & set(token))
         if not found:
             unusable.append((body[:120], _why_no_domain(body)))
     return domains, unusable

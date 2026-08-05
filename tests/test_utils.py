@@ -380,3 +380,38 @@ def test_the_screenshot_paste():
         "vegassigns.co.za",
     ]
     assert unusable == []
+
+
+# ---------------------------- URL, у которого пробелом порвало ещё и путь
+#
+# Реальная строка из выгрузки: разделитель слева, пробел внутри хоста, пробел
+# после первого "/", и дальше длинный путь, в котором попадаются обломки вида
+# "jquery.min.js" — а .js это настоящая зона (Jersey), по форме от домена не
+# отличить. Отличается по позиции: это хвост уже начатого URL.
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("--- https://www.ski-instruktor. sk/ wp-content/themes/hello-elementor"
+     "/template-parts/template-pages.php?p=.", "ski-instruktor.sk"),
+    ("*** https://baz. it/ wp-includes/js/jquery/jquery.min.js", "baz.it"),
+    ("https://a. de/ wp-content/uploads/2024/logo.png", "a.de"),
+    ("https://x. co.uk/ assets/app.min.js?ver=6.4.2", "x.co.uk"),
+    ("https://y. fr/ bundle.zip", "y.fr"),          # .zip is a real TLD
+    ("--- https://z. no/ setup.sh", "z.no"),        # .sh is a real TLD
+    ("baz.it/ wp-includes/js/jquery/jquery.min.js", "baz.it"),  # no scheme either
+    ("1. https://one. fr/", "one.fr"),
+    ("• https://four. pl/", "four.pl"),
+])
+def test_path_fragments_after_a_broken_url_are_not_domains(line, expected):
+    assert only(line) == [expected]
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("https://a.com/x  https://b.com/y", ["a.com", "b.com"]),
+    ("https://a. com/lp   https://b. net/lp", ["a.com", "b.net"]),
+    ("a.com, b.com", ["a.com", "b.com"]),
+    ("a.com b.com c.com", ["a.com", "b.com", "c.com"]),
+])
+def test_several_real_domains_on_one_line_survive_that_rule(line, expected):
+    """Suppressing path tails must not suppress a genuine second domain."""
+    assert only(line) == expected
