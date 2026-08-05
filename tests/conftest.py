@@ -11,7 +11,12 @@ class FakeResolver:
     """Stands in for dns.resolver.Resolver; answers come from a dict."""
 
     def __init__(self, answers: dict[tuple[str, str], list[str]] | None = None):
-        self.answers = answers or {}
+        # Normalise the keys the same way lookups are, so a capitalised name
+        # in a test fixture (AS1234.asn.cymru.com) still matches.
+        self.answers = {
+            (n.lower().rstrip("."), t.upper()): v
+            for (n, t), v in (answers or {}).items()
+        }
         self.queries: list[tuple[str, str]] = []
 
     def resolve(self, name, rdtype, tcp=False):

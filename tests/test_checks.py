@@ -1,7 +1,7 @@
 import time
 
 import pytest
-from conftest import FakeResolver, FakeResponse, FakeSession, redirect_to
+from conftest import FakeRdata, FakeResolver, FakeResponse, FakeSession, redirect_to
 
 from domain_scanner.checks.blocklists import (
     ZONES,
@@ -684,3 +684,111 @@ def test_blocklist_real_error_code_is_still_rejected(ctx_factory):
     })
     result = check_blocklists(ctx_factory(resolver=resolver))
     assert "URIBL" in result.data["unavailable_zones"]
+
+
+# ------------------------------------------------ дефолтные NS и ротация IP
+
+
+def test_dns_flags_default_hosting_nameservers(ctx_factory):
+    """Домен на стоковых NS хостинга — его никто не настраивал."""
+    resolver = FakeResolver({
+        ("example.com", "NS"): ["ns1.dns-parking.com.", "ns2.dns-parking.com."],
+        ("example.com", "A"): ["1.2.3.4"],
+    })
+    result = check_dns(ctx_factory(resolver=resolver))
+    assert "dns.default_hosting_ns" in codes(result)
+    # Это не то же самое, что «домен продаётся».
+    assert "dns.parked" not in codes(result)
+
+
+def test_dns_parking_wins_over_default_ns(ctx_factory):
+    resolver = FakeResolver({
+        ("example.com", "NS"): ["ns1.sedoparking.com."],
+        ("example.com", "A"): ["1.2.3.4"],
+    })
+    result = check_dns(ctx_factory(resolver=resolver))
+    assert "dns.parked" in codes(result)
+    assert "dns.default_hosting_ns" not in codes(result)
+
+
+class RotatingResolver(FakeResolver):
+    """Отдаёт разные A-записи на каждый запрос, как дешёвый хостинг."""
+
+    def __init__(self, pools):
+        super().__init__({})
+        self.pools = list(pools)
+        self.calls = 0
+
+    def resolve(self, name, rdtype, tcp=False):
+        self.queries.append((name, rdtype))
+        if rdtype.upper() == "A" and name.lower().rstrip(".") == "example.com":
+            pool = self.pools[min(self.calls, len(self.pools) - 1)]
+            self.calls += 1
+            return [FakeRdata(v) for v in pool]
+        if rdtype.upper() == "NS":
+            return [FakeRdata("ns1.example-dns.com.")]
+        import dns.resolver
+        raise dns.resolver.NXDOMAIN()
+
+
+def test_dns_detects_rotating_addresses(ctx_factory):
+    """Два запроса подряд дают разные адреса — сравнивать по IP нельзя."""
+    resolver = RotatingResolver([["1.1.1.1", "2.2.2.2"], ["3.3.3.3", "4.4.4.4"]])
+    result = check_dns(ctx_factory(resolver=resolver))
+    assert result.data["rotating_ips"] is True
+    assert "dns.rotating_ips" in codes(result)
+    # Собраны адреса из обоих ответов, а не только из первого.
+    assert set(result.data["a"]) == {"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"}
+
+
+def test_dns_stable_addresses_are_not_flagged(ctx_factory):
+    resolver = RotatingResolver([["1.1.1.1"], ["1.1.1.1"]])
+    result = check_dns(ctx_factory(resolver=resolver))
+    assert result.data["rotating_ips"] is False
+    assert "dns.rotating_ips" not in codes(result)
+
+
+# ------------------------------------------------------- хостинг: без мнений
+
+
+def test_hosting_states_the_network_without_judging_it(ctx_factory):
+    """Кто хостит — факт с нулевым весом, а не обвинение."""
+    resolver = FakeResolver({
+        ("4.3.2.1.origin.asn.cymru.com", "TXT"): ['"47583 | 1.2.3.0/24 | CY | ripe | 2015-01-01"'],
+        ("AS47583.asn.cymru.com", "TXT"):
+            ['"47583 | CY | ripe | 2008-01-01 | AS-HOSTINGER - Hostinger International Limited, CY"'],
+    })
+    result = check_hosting(ctx_factory(resolver=resolver, shared={"ips": ["1.2.3.4"]}))
+    assert "hosting.network" in codes(result)
+    assert result.risk_points == 0, "хостинг сам по себе не должен двигать оценку"
+
+
+def test_hosting_reports_truncated_neighbour_count_honestly(ctx_factory):
+    """Ровно 500 от бесплатного API — это обрезка, а не количество."""
+    resolver = FakeResolver({
+        ("4.3.2.1.origin.asn.cymru.com", "TXT"): ['"64500 | 1.2.3.0/24 | NL | ripe | 2015-01-01"'],
+        ("AS64500.asn.cymru.com", "TXT"): ['"64500 | NL | ripe | 2015-01-01 | SOME-HOST, NL"'],
+    })
+    session = FakeSession({"hackertarget": FakeResponse(
+        text="\n".join(f"site{i}.com" for i in range(500)))})
+    result = check_hosting(
+        ctx_factory(resolver=resolver, session=session, shared={"ips": ["1.2.3.4"]})
+    )
+    assert result.data["neighbour_count_truncated"] is True
+    msg = next(f.message for f in result.findings if f.code == "hosting.crowded_ip")
+    assert "500+" in msg and "лимит API" in msg
+
+
+def test_hosting_exact_count_is_not_marked_truncated(ctx_factory):
+    resolver = FakeResolver({
+        ("4.3.2.1.origin.asn.cymru.com", "TXT"): ['"64500 | 1.2.3.0/24 | NL | ripe | 2015-01-01"'],
+        ("AS64500.asn.cymru.com", "TXT"): ['"64500 | NL | ripe | 2015-01-01 | SOME-HOST, NL"'],
+    })
+    session = FakeSession({"hackertarget": FakeResponse(
+        text="\n".join(f"site{i}.com" for i in range(347)))})
+    result = check_hosting(
+        ctx_factory(resolver=resolver, session=session, shared={"ips": ["1.2.3.4"]})
+    )
+    assert result.data["neighbour_count_truncated"] is False
+    msg = next(f.message for f in result.findings if f.code == "hosting.crowded_ip")
+    assert "347" in msg and "+" not in msg

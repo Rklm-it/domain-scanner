@@ -232,3 +232,71 @@ def test_csv_deduplicates_asns():
     ]}})
     row = to_csv([r]).splitlines()[1]
     assert "13335; 15169" in row
+
+
+# ------------------------------------------- общий след: сеть, а не только IP
+
+
+def rotating_batch():
+    """Три домена в одном хостинг-кластере, но с разными адресами.
+
+    Так выглядит дешёвый хостинг, раздающий адреса из пула: сравнение по
+    точному IP связь между доменами не находит.
+    """
+    return [
+        report_with("a.com.co", data={
+            "dns": {"a": ["147.79.72.1"], "ns_provider": ["dns-parking.com"]},
+            "hosting": {"networks": [{"asn": "47583", "prefix": "147.79.72.0/24"}]},
+        }),
+        report_with("b.com.co", data={
+            "dns": {"a": ["147.79.72.99"], "ns_provider": ["dns-parking.com"]},
+            "hosting": {"networks": [{"asn": "47583", "prefix": "147.79.72.0/24"}]},
+        }),
+        report_with("c.com", data={
+            "dns": {"a": ["135.181.246.23"], "ns_provider": ["cloudflare.com"]},
+            "hosting": {"networks": [{"asn": "24940", "prefix": "135.181.0.0/16"}]},
+        }),
+    ]
+
+
+def test_footprint_links_domains_sharing_a_prefix_not_an_ip():
+    links = analyze(rotating_batch())
+    prefix = next((l for l in links if l.kind == "prefix"), None)
+    assert prefix is not None, "связь по подсети должна находиться при разных IP"
+    assert prefix.domains == ["a.com.co", "b.com.co"]
+    assert "c.com" not in prefix.domains
+
+
+def test_footprint_does_not_repeat_prefix_when_ip_already_matched():
+    same_ip = [
+        report_with(f"d{i}.com", data={
+            "dns": {"a": ["5.5.5.5"]},
+            "hosting": {"networks": [{"asn": "64500", "prefix": "5.5.5.0/24"}]},
+        })
+        for i in range(2)
+    ]
+    links = analyze(same_ip)
+    assert any(l.kind == "ip" for l in links)
+    assert not any(l.kind == "prefix" for l in links), "не дублировать ту же связь"
+
+
+def test_footprint_ignores_shared_cdn_asn():
+    """Половина интернета за Cloudflare — это ничего не связывает."""
+    cdn = [
+        report_with(f"e{i}.com", data={
+            "dns": {"a": [f"104.20.0.{i}"], "ns_provider": ["cloudflare.com"]},
+            "hosting": {"networks": [{"asn": "13335", "prefix": f"104.20.{i}.0/24"}]},
+        })
+        for i in range(3)
+    ]
+    links = analyze(cdn)
+    assert not any(l.kind == "asn" for l in links)
+    assert not any(l.kind == "ns" for l in links)
+
+
+def test_footprint_flags_shared_hosting_nameservers():
+    links = analyze(rotating_batch())
+    ns = next((l for l in links if l.kind == "ns"), None)
+    assert ns is not None
+    assert ns.value == "dns-parking.com"
+    assert ns.domains == ["a.com.co", "b.com.co"]

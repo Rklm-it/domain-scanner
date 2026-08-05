@@ -1,5 +1,5 @@
 {
-  "_comment": "Registrars and nameserver operators that show up disproportionately in abuse reporting, plus 'parking' nameservers that mean the domain is not really in use. Matching is case-insensitive substring against the RDAP registrar name / NS hostname. This is a soft signal only.",
+  "_comment": "Registrars and nameserver operators over-represented in abuse reporting. 'parking_ns' means the domain is for sale / not in use. 'default_hosting_ns' means it still sits on the stock nameservers a cheap host assigns at signup -- weaker signal, but it says nobody configured anything. Matching is case-insensitive substring. Soft signals only.",
   "high_abuse": [
     "namesilo",
     "nicenic",
@@ -39,5 +39,16 @@
     "infinityfree.net",
     "byet.org",
     "epizy.com"
+  ],
+  "default_hosting_ns": [
+    "dns-parking.com",
+    "hostinger.com",
+    "registrar-servers.com",
+    "namecheaphosting.com",
+    "privatedns.zone",
+    "dnsowl.com",
+    "vercel-dns.com",
+    "await.pw",
+    "ui-dns."
   ]
 }

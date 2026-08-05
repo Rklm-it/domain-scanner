@@ -15,6 +15,11 @@ def check_dns(ctx: ScanContext) -> CheckResult:
     domain = ctx.domain
 
     a_records = dns_query_quiet(r, domain, "A")
+    # A second lookup a moment later. Cheap hosts hand out addresses from a
+    # large rotating pool, so a single lookup is not a stable identity for the
+    # domain -- and comparing exact IPs across a batch silently misses the link
+    # when two domains sit in the same pool but answer with different members.
+    a_second = dns_query_quiet(r, domain, "A")
     aaaa_records = dns_query_quiet(r, domain, "AAAA")
     try:
         ns_records = [n.rstrip(".").lower() for n in dns_query(r, domain, "NS")]
@@ -24,7 +29,8 @@ def check_dns(ctx: ScanContext) -> CheckResult:
     txt_records = [unquote_txt(t) for t in dns_query_quiet(r, domain, "TXT")]
     dmarc = [unquote_txt(t) for t in dns_query_quiet(r, f"_dmarc.{domain}", "TXT")]
 
-    ips = sorted(set(a_records))
+    ips = sorted(set(a_records) | set(a_second))
+    rotating = bool(a_records) and bool(a_second) and set(a_records) != set(a_second)
     ns_base = sorted({".".join(n.split(".")[-2:]) for n in ns_records})
     spf = [t for t in txt_records if t.lower().startswith("v=spf1")]
 
@@ -38,6 +44,7 @@ def check_dns(ctx: ScanContext) -> CheckResult:
         "spf": spf,
         "dmarc": dmarc,
         "resolves": bool(ips or aaaa_records),
+        "rotating_ips": rotating,
     }
     ctx.set("ips", ips)
     ctx.set("ns", ns_records)
@@ -57,6 +64,23 @@ def check_dns(ctx: ScanContext) -> CheckResult:
     if parking:
         result.add("dns.parked", "high",
                    f"NS-серверы принадлежат парковочному сервису ({parking[0]})",
+                   {"ns": ns_records})
+
+    if rotating:
+        result.add("dns.rotating_ips", "info",
+                   "адреса меняются между запросами — хостинг раздаёт их из общего "
+                   "пула. Сравнивать домены по конкретному IP тут ненадёжно, "
+                   "смотри на сеть целиком",
+                   {"first": sorted(set(a_records)), "second": sorted(set(a_second))})
+
+    default_ns = [
+        p for p in ctx.config.registrars.get("default_hosting_ns", [])
+        if any(p in n for n in ns_records)
+    ]
+    if default_ns and not parking:
+        result.add("dns.default_hosting_ns", "low",
+                   f"домен так и остался на дефолтных NS хостинга ({default_ns[0]}) — "
+                   "значит его никто не настраивал сверх минимума",
                    {"ns": ns_records})
 
     free_host = [

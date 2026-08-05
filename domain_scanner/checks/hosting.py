@@ -20,15 +20,18 @@ CDN_ASNS = {
     "54994": "QuickPacket",
 }
 
-# Networks that repeatedly host abuse. A hit is a soft signal, not a verdict.
-SUSPECT_ASN_NAMES = (
-    "bulletproof", "offshore", "flokinet", "ddos-guard", "stark industries",
-    "aeza", "chang way", "pq hosting", "mivocloud", "greenfloid", "hostkey",
-    "vdsina", "ihor", "selectel", "timeweb", "cloud9", "alexhost", "hostinger",
-    "shinjiru", "kaopu", "amarutu", "iomart",
-)
-
 HACKERTARGET_REVERSE = "https://api.hackertarget.com/reverseiplookup/"
+
+# The free reverse-IP tier truncates. A result sitting exactly on a round
+# number is a truncated list, not a count, and must not be reported as one.
+LIKELY_TRUNCATION_POINTS = (100, 250, 500, 1000)
+
+# There used to be a hand-written list of "abusive" hosting networks here, and
+# a medium-severity finding fired off it. It was opinion with no measurement
+# behind it -- on one real batch it was the sole reason three domains scored
+# 22/WATCH. Who hosts a domain is now reported as fact at info level; whether
+# a given network predicts trouble is for the calibration view to answer from
+# recorded outcomes, not for this list to assert.
 
 
 def cymru_lookup(ctx: ScanContext, ip: str) -> dict:
@@ -88,15 +91,6 @@ def check_hosting(ctx: ScanContext) -> CheckResult:
     result.data["cdn"] = sorted({CDN_ASNS[a] for a in asns if a in CDN_ASNS})
     ctx.set("behind_cdn", behind_cdn)
 
-    for name in names:
-        low = (name or "").lower()
-        hit = next((s for s in SUSPECT_ASN_NAMES if s in low), None)
-        if hit:
-            result.add("hosting.suspect_network", "medium",
-                       f"хостится в сети с тяжёлой историей абуза ({name})",
-                       {"as_name": name})
-            break
-
     countries = {n.get("country") for n in networks if n.get("country")}
     result.data["countries"] = sorted(c for c in countries if c)
 
@@ -109,19 +103,27 @@ def check_hosting(ctx: ScanContext) -> CheckResult:
             reverse_ip_neighbours(ctx, ips[0]) if ctx.config.http_available else None
         )
         if neighbours is not None:
-            result.data["neighbour_count"] = len(neighbours)
+            count = len(neighbours)
+            truncated = count in LIKELY_TRUNCATION_POINTS
+            shown = f"{count}+" if truncated else str(count)
+            result.data["neighbour_count"] = count
+            result.data["neighbour_count_truncated"] = truncated
             result.data["neighbours_sample"] = neighbours[:15]
-            if len(neighbours) >= ctx.config.crowded_ip_domains:
+            if count >= ctx.config.crowded_ip_domains:
+                note = " (столько отдал бесплатный лимит API, реально может быть больше)" \
+                    if truncated else ""
                 result.add("hosting.crowded_ip", "medium",
-                           f"на {ips[0]} сидит ещё {len(neighbours)} доменов — массовый шаред-хостинг, "
-                           "репутация соседей переходит на тебя",
-                           {"count": len(neighbours), "ip": ips[0]})
-            elif len(neighbours) > 1:
+                           f"на {ips[0]} сидит ещё {shown} доменов{note} — массовый "
+                           "шаред-хостинг, репутация соседей переходит на тебя",
+                           {"count": count, "truncated": truncated, "ip": ips[0]})
+            elif count > 1:
                 result.add("hosting.shared_ip", "info",
-                           f"на {ips[0]} сидит доменов: {len(neighbours)}",
-                           {"count": len(neighbours)})
+                           f"на {ips[0]} сидит доменов: {shown}",
+                           {"count": count, "truncated": truncated})
 
-    if not result.findings:
-        as_label = names[0] if names else ", ".join(sorted(a for a in asns if a))
-        result.add("hosting.ok", "info", f"хостится в {as_label}")
+    # Who hosts it, stated as fact and weighted at zero.
+    as_label = names[0] if names else ", ".join(sorted(a for a in asns if a))
+    if as_label:
+        result.add("hosting.network", "info", f"хостится в {as_label}",
+                   {"as_name": as_label, "asns": sorted(a for a in asns if a)})
     return result

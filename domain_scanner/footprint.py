@@ -14,7 +14,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from .checks.hosting import CDN_ASNS
 from .models import DomainReport
+
+# Nameserver operators so widely used that sharing one links nothing.
+GENERIC_NS = {
+    "cloudflare.com", "awsdns-01.org", "awsdns-02.org", "googledomains.com",
+    "azure-dns.com", "domaincontrol.com", "nsone.net",
+}
 
 
 @dataclass
@@ -74,6 +81,22 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
         add("ip", ip, domains, escalate("high", domains),
             f"{len(domains)} из {total} доменов сидят на одном IP {ip}")
 
+    # Exact IPs are a weak key on hosts that rotate addresses from a pool, so
+    # the announced prefix is compared too: same /24 is effectively the same
+    # hosting cluster, and it survives rotation that hides a shared IP.
+    prefix_pairs = [
+        (str(n.get("prefix")), r.domain)
+        for r in usable
+        for n in (r.data("hosting", "networks") or [])
+        if n.get("prefix")
+    ]
+    for prefix, domains in _group(prefix_pairs).items():
+        if any(l.kind == "ip" and set(domains) <= set(l.domains) for l in links):
+            continue  # already reported as a shared IP, do not say it twice
+        add("prefix", prefix, domains, escalate("medium", domains),
+            f"{len(domains)} из {total} доменов в одной подсети {prefix} — "
+            "один хостинг-кластер, даже если адреса разные")
+
     asn_pairs = [
         (str(n.get("asn")), r.domain)
         for r in usable
@@ -81,9 +104,13 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
         if n.get("asn")
     ]
     for asn, domains in _group(asn_pairs).items():
-        if len(domains) == total and total > 2:
-            add("asn", f"AS{asn}", domains, "low",
-                f"все {total} доменов в AS{asn} — одна хостинг-сеть")
+        # Sharing a big CDN or cloud says nothing -- half the internet is there.
+        if asn in CDN_ASNS:
+            continue
+        if any(l.kind == "prefix" and set(domains) <= set(l.domains) for l in links):
+            continue
+        add("asn", f"AS{asn}", domains, escalate("low", domains),
+            f"{len(domains)} из {total} доменов в AS{asn} — одна хостинг-сеть")
 
     ns_pairs = [
         (provider, r.domain)
@@ -91,11 +118,10 @@ def analyze(reports: list[DomainReport]) -> list[Link]:
         for provider in (r.data("dns", "ns_provider") or [])
     ]
     for provider, domains in _group(ns_pairs).items():
-        if len(domains) == total and total > 2 and provider not in (
-            "cloudflare.com", "awsdns-01.org", "googledomains.com"
-        ):
-            add("ns", provider, domains, "low",
-                f"у всех {total} доменов один NS-оператор ({provider})")
+        if provider in GENERIC_NS:
+            continue
+        add("ns", provider, domains, escalate("low", domains),
+            f"у {len(domains)} из {total} доменов один NS-оператор ({provider})")
 
     # --- registration ---
     reg_pairs = [
