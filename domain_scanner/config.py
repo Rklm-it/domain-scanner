@@ -118,7 +118,7 @@ class Config:
     dns_timeout: float = 6.0
     nameservers: list[str] | None = None
     proxy: str | None = None
-    workers: int = 8
+    workers: int = 20
     max_redirects: int = 10
 
     # --- deadlines ---

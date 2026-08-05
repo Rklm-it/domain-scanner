@@ -30,21 +30,45 @@ def patched(monkeypatch):
 
 def test_read_domains_from_args():
     args = cli.build_parser().parse_args(["a.com", "b.com"])
-    assert cli.read_domains(args) == ["a.com", "b.com"]
+    assert cli.read_domains(args) == (["a.com", "b.com"], [])
 
 
 def test_read_domains_splits_commas_and_drops_comments(tmp_path):
     f = tmp_path / "d.txt"
     f.write_text("a.com, b.com\n# comment\nc.com  # trailing\n\n")
     args = cli.build_parser().parse_args(["-f", str(f)])
-    assert cli.read_domains(args) == ["a.com", "b.com", "c.com"]
+    assert cli.read_domains(args) == (["a.com", "b.com", "c.com"], [])
 
 
 def test_read_domains_deduplicates(tmp_path):
     f = tmp_path / "d.txt"
     f.write_text("a.com\nA.COM\nb.com\n")
     args = cli.build_parser().parse_args(["-f", str(f)])
-    assert cli.read_domains(args) == ["a.com", "b.com"]
+    assert cli.read_domains(args) == (["a.com", "b.com"], [])
+
+
+def test_read_domains_strips_notes_after_the_domain(tmp_path):
+    """A real list is a domain plus whatever the buyer wrote next to it."""
+    f = tmp_path / "d.txt"
+    f.write_text(
+        "   a-lander.com   \n"
+        "b.com  — акк 3, улетел на верифу 12.06\n"
+        "https://c.com/lp?utm=x   (клоака под DE)\n"
+    )
+    args = cli.build_parser().parse_args(["-f", str(f)])
+    domains, unusable = cli.read_domains(args)
+    assert domains == ["a-lander.com", "b.com", "c.com"]
+    assert unusable == []
+
+
+def test_read_domains_reports_a_line_it_could_not_use(tmp_path):
+    """A typo'd domain must be named, not silently dropped from the batch."""
+    f = tmp_path / "d.txt"
+    f.write_text("good.com\nbroken,com\n")
+    args = cli.build_parser().parse_args(["-f", str(f)])
+    domains, unusable = cli.read_domains(args)
+    assert domains == ["good.com"]
+    assert unusable == [("broken,com", "нет точки — на домен не похоже")]
 
 
 def test_list_checks_exits_clean(capsys):

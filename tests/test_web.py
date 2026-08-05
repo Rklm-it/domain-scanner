@@ -152,10 +152,28 @@ def test_submit_normalises_and_deduplicates(client):
 
 
 def test_submit_reports_rejected_input(client):
+    """One unusable line, one rejection -- not one per word on that line."""
     resp = client.post("/api/scans", json={"domains": ["good.com", "not a domain!!", "8.8.8.8"]})
     body = resp.json()
     assert body["domains"] == ["good.com"]
-    assert {r["input"] for r in body["rejected"]} == {"not", "a", "domain!!", "8.8.8.8"}
+    assert {r["input"] for r in body["rejected"]} == {"not a domain!!", "8.8.8.8"}
+    reason = next(r["reason"] for r in body["rejected"] if r["input"] == "8.8.8.8")
+    assert reason == "это IP-адрес, а не домен"
+
+
+def test_submit_strips_notes_and_whitespace_around_domains(client):
+    """The paste that used to produce a screenful of bogus rejections."""
+    resp = client.post("/api/scans", json={"domains": [
+        "   spaced-out.com   ",
+        "annotated.com  — акк 3, лил в июне, живой",
+        "https://with-path.com/lp?utm=x   (клоака под DE)",
+        "a.com, b.com;  c.com",
+    ]})
+    body = resp.json()
+    assert body["domains"] == [
+        "spaced-out.com", "annotated.com", "with-path.com", "a.com", "b.com", "c.com",
+    ]
+    assert body["rejected"] == []
 
 
 def test_submit_all_invalid_is_400(client):

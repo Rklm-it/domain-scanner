@@ -22,6 +22,7 @@ from .report import (
 )
 from .preflight import run_preflight
 from .scanner import scan_domains
+from .utils import extract_domains
 
 EXIT_CLEAN = 0
 EXIT_RISKY = 1
@@ -32,33 +33,27 @@ class InputError(Exception):
     """A problem with the domains the user supplied."""
 
 
-def read_domains(args: argparse.Namespace) -> list[str]:
-    domains: list[str] = list(args.domains or [])
+def read_domains(args: argparse.Namespace) -> tuple[list[str], list[tuple[str, str]]]:
+    """Collect domains from arguments, files and stdin.
+
+    Returns ``(domains, unusable)`` -- lines that contained no domain are
+    reported rather than silently dropped, since a typo'd domain that quietly
+    disappears from a batch is worse than one that is called out.
+    """
+    lines: list[str] = list(args.domains or [])
     if args.file:
         for path in args.file:
             if path == "-":
-                domains.extend(sys.stdin.read().splitlines())
+                lines.extend(sys.stdin.read().splitlines())
                 continue
             try:
                 text = Path(path).read_text(encoding="utf-8")
             except OSError as exc:
                 raise InputError(f"cannot read {path}: {exc.strerror}") from exc
-            domains.extend(text.splitlines())
-    if not domains and not sys.stdin.isatty():
-        domains.extend(sys.stdin.read().splitlines())
-    # Split comma-separated pastes and drop comments/blanks.
-    expanded: list[str] = []
-    for item in domains:
-        item = item.split("#", 1)[0]
-        expanded.extend(part.strip() for part in item.replace(",", " ").split())
-    seen: set[str] = set()
-    unique: list[str] = []
-    for d in expanded:
-        key = d.lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(d)
-    return unique
+            lines.extend(text.splitlines())
+    if not lines and not sys.stdin.isatty():
+        lines.extend(sys.stdin.read().splitlines())
+    return extract_domains("\n".join(lines))
 
 
 def preflight(config: Config, stream, paint: Painter) -> None:
@@ -110,8 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="also report attributes shared across the scanned batch")
 
     net = parser.add_argument_group("network")
-    net.add_argument("-w", "--workers", type=int, default=8,
-                     help="domains scanned in parallel (default: 8)")
+    net.add_argument("-w", "--workers", type=int, default=20,
+                     help="domains scanned in parallel (default: 20)")
     net.add_argument("--timeout", type=float, default=12.0, help="HTTP timeout in seconds")
     net.add_argument("--dns-timeout", type=float, default=6.0, help="DNS timeout in seconds")
     net.add_argument("--domain-budget", type=float, default=120.0, metavar="SECONDS",
@@ -176,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         config.disabled_checks = requested
 
     try:
-        domains = read_domains(args)
+        domains, unusable = read_domains(args)
     except InputError as exc:
         parser.error(str(exc))
     if not domains:
@@ -185,6 +180,9 @@ def main(argv: list[str] | None = None) -> int:
     to_stdout = {args.json, args.csv, args.markdown} & {"-"}
     stream = sys.stderr if to_stdout else sys.stdout
     paint = Painter(use_color(stream) and not args.no_color)
+
+    for line, reason in unusable:
+        print(paint(f"skipped: {line!r} — {reason}", "\033[93m"), file=stream)
 
     if not args.no_preflight:
         preflight(config, stream, paint)

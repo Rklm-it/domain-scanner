@@ -100,6 +100,92 @@ def parse_domain(value: str) -> tuple[str, str, str]:
     return registrable, sld, suffix
 
 
+# One domain, pulled out of whatever it was pasted next to.
+#
+# The strictness lives in the last label: letters only, at least two of them.
+# That is what keeps ordinary prose out -- "конверт 3.5%", "и т.д.", a version
+# number -- while still allowing IDN zones like .рф, since the character
+# classes are Unicode-aware. A URL's path is swallowed whole so that
+# "site.com/a/index.html" yields one domain rather than two.
+_DOMAIN_TOKEN_RE = re.compile(
+    r"""
+    (?<![\w@.\-])                          # not mid-word, and not an email address
+    (?:[a-z][a-z0-9+.\-]*://)?             # scheme, when this is a URL
+    (?:[^\W_](?:[\w\-]{0,61}[^\W_])?\.)+   # one or more labels
+    [^\W\d_]{2,24}                         # the suffix: letters, never digits
+    (?![\w\-])                             # and the name ends here
+    (?:[:/?\#]\S*)?                        # port, path, query -- consumed, not parsed
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Suffixes that match the pattern above but are file extensions, not zones.
+# Only entries IANA has never delegated belong here: .zip, .mov, .sh, .js,
+# .md, .py, .pl and .dev are all real TLDs and must keep working as domains.
+NON_TLD_SUFFIXES = {
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg",
+    "pdf", "txt", "rtf", "docx", "xlsx", "pptx", "odt", "csv", "tsv",
+    "html", "htm", "xhtml", "css", "php", "aspx", "jsp",
+    "json", "xml", "yaml", "yml", "toml", "ini", "conf", "cfg",
+    "exe", "dll", "rar", "tar", "gz", "iso", "bin",
+    "mp3", "mp4", "avi", "mkv", "wav", "flac", "webm",
+    "log", "bak", "sql", "env",
+}
+
+
+def extract_domains(text: str) -> tuple[list[str], list[tuple[str, str]]]:
+    """Pull registrable domains out of arbitrary pasted text.
+
+    Real lists are never clean. A domain arrives with a note after it, as a URL
+    with a path and query, wrapped in quotes or brackets, behind stray tabs, or
+    followed by a comment. Splitting on whitespace and calling every resulting
+    word a candidate turns one annotated domain into a screenful of rejections,
+    which is worse than useless -- it buries the line that genuinely was a typo.
+
+    So: text around a domain is dropped silently, and a line that yields no
+    domain at all is returned separately, whole, with a reason. That way the
+    caller can name the one line it could not use.
+
+    Returns ``(domains, unusable)``; domains are normalised, de-duplicated and
+    in the order they appeared.
+    """
+    domains: list[str] = []
+    unusable: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for line in text.splitlines():
+        body = line.split("#", 1)[0].strip()
+        if not body:
+            continue
+        found = False
+        for match in _DOMAIN_TOKEN_RE.finditer(body):
+            try:
+                registrable, _sld, suffix = parse_domain(match.group(0))
+            except DomainParseError:
+                continue
+            if suffix.rsplit(".", 1)[-1] in NON_TLD_SUFFIXES:
+                continue  # a filename that happens to be shaped like a domain
+            found = True
+            if registrable not in seen:
+                seen.add(registrable)
+                domains.append(registrable)
+        if not found:
+            unusable.append((body[:120], _why_no_domain(body)))
+    return domains, unusable
+
+
+def _why_no_domain(line: str) -> str:
+    """Say something more useful than "invalid" when a line yields nothing."""
+    stripped = line.strip().strip("\"'<>()[]")
+    if is_ip(stripped):
+        return "это IP-адрес, а не домен"
+    if "@" in stripped:
+        return "это почта — нужен домен без имени ящика"
+    if "." not in stripped:
+        return "нет точки — на домен не похоже"
+    return "не нашёл здесь домена"
+
+
 def make_resolver(timeout: float = 6.0, nameservers: list[str] | None = None) -> dns.resolver.Resolver:
     resolver = dns.resolver.Resolver()
     if nameservers:

@@ -20,7 +20,7 @@ from ..config import Config, env_bool, env_float, env_int, env_str, load_dotenv
 from ..models import DomainReport
 from ..preflight import ConnectivityMonitor
 from ..report import to_csv, to_json, to_markdown
-from ..utils import DomainParseError, parse_domain
+from ..utils import DomainParseError, extract_domains, parse_domain
 from .db import VALID_OUTCOMES, Database
 from .jobs import ScanRunner
 
@@ -122,7 +122,7 @@ def create_app(
 
     db = Database(db_path or env_str("SCANNER_DB", "data/scanner.db"))
     cfg = config or Config.from_env(
-        workers=env_int("SCANNER_WORKERS", 8),
+        workers=env_int("SCANNER_WORKERS", 20),
         http_timeout=env_float("SCANNER_HTTP_TIMEOUT", 12.0),
         domain_budget=env_float("SCANNER_DOMAIN_BUDGET", 120.0),
         domain_timeout=env_float("SCANNER_DOMAIN_TIMEOUT", 240.0),
@@ -224,22 +224,12 @@ def create_app(
     def create_scan(payload: ScanRequest, request: Request) -> dict:
         limiter.check(client_key(request, trust_proxy))
 
-        cleaned: list[str] = []
-        rejected: list[dict] = []
-        seen: set[str] = set()
-        for raw in payload.domains:
-            for part in raw.replace(",", " ").split():
-                part = part.split("#", 1)[0].strip()
-                if not part:
-                    continue
-                try:
-                    domain = parse_domain(part)[0]
-                except DomainParseError as exc:
-                    rejected.append({"input": part, "reason": str(exc)})
-                    continue
-                if domain not in seen:
-                    seen.add(domain)
-                    cleaned.append(domain)
+        # Domains arrive pasted from a spreadsheet or a chat: padded with
+        # whitespace, annotated, as URLs with paths. Pull the domain out of
+        # each line and ignore the rest of it, rather than treating every word
+        # of a note as a failed domain.
+        cleaned, unusable = extract_domains("\n".join(payload.domains))
+        rejected = [{"input": line, "reason": reason} for line, reason in unusable]
 
         if not cleaned:
             raise HTTPException(400, detail={"error": "no valid domains", "rejected": rejected})

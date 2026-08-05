@@ -3,6 +3,7 @@ import pytest
 from domain_scanner.utils import (
     DomainParseError,
     RateLimiter,
+    extract_domains,
     is_ip,
     normalize_input,
     parse_domain,
@@ -201,3 +202,111 @@ def test_load_dotenv_handles_comments_and_export(tmp_path, monkeypatch):
     assert os.environ["SCANNER_WORKERS"] == "8"
     assert os.environ["SCANNER_DB"] == "/data/x.db"
     assert os.environ["QUOTED"] == "has # hash"
+
+
+# ------------------------------------------- вытаскивание домена из текста
+#
+# Списки доменов приходят из таблиц и чатов: с отступами, с пометками справа,
+# URL-ами целиком. Раньше строка резалась по пробелам и каждое слово пометки
+# объявлялось «отклонённым доменом» — экран мусора, в котором терялась
+# единственная строка с настоящей опечаткой.
+
+
+def only(text):
+    domains, unusable = extract_domains(text)
+    assert unusable == [], unusable
+    return domains
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("   padded.com   ", "padded.com"),
+    ("\t\ttabbed.com\t", "tabbed.com"),
+    ("noted.com  — акк 3, улетел на верифу", "noted.com"),
+    ("noted.com - account 3, dead", "noted.com"),
+    ("shop.com: наш основной ленд", "shop.com"),
+    ("https://url.com/lp/index.html?utm=x&a=1", "url.com"),
+    ("http://www.WWWish.com/", "wwwish.com"),
+    ("«quoted.com»", "quoted.com"),
+    ("[bracketed.com]", "bracketed.com"),
+    ("(parens.com)", "parens.com"),
+    ("port.com:8080/lp", "port.com"),
+    ("trailing-dot.com.", "trailing-dot.com"),
+    ("multi.level.co.uk  проверить", "level.co.uk"),
+])
+def test_extract_pulls_one_domain_out_of_a_messy_line(line, expected):
+    assert only(line) == [expected]
+
+
+def test_extract_keeps_several_domains_on_one_line():
+    assert only("a.com, b.com;  c.com   d.com") == ["a.com", "b.com", "c.com", "d.com"]
+
+
+def test_extract_deduplicates_across_lines():
+    assert only("a.com\nA.COM\nhttps://www.a.com/lp\nb.com") == ["a.com", "b.com"]
+
+
+def test_extract_preserves_input_order():
+    assert only("z.com\nm.com\na.com") == ["z.com", "m.com", "a.com"]
+
+
+def test_extract_drops_comments():
+    assert only("a.com # старый\n# целиком коммент\nb.com") == ["a.com", "b.com"]
+
+
+@pytest.mark.parametrize("prose", [
+    "конверт 3.5% и т.д.",
+    "смотри в доке, стр. 12",
+    "Ленды на июль:",
+    "проверить всё это завтра",
+])
+def test_extract_finds_nothing_in_prose(prose):
+    domains, unusable = extract_domains(prose)
+    assert domains == []
+    assert len(unusable) == 1
+
+
+@pytest.mark.parametrize("name", [
+    "report.pdf", "screenshot.png", "выгрузка.xlsx", "index.html", "config.json",
+])
+def test_extract_ignores_filenames_shaped_like_domains(name):
+    """A file extension is not a zone -- .pdf and .png are not delegated."""
+    assert extract_domains(f"приложил {name}")[0] == []
+
+
+@pytest.mark.parametrize("real", ["archive.zip", "clip.mov", "script.sh", "app.py"])
+def test_extract_keeps_names_whose_suffix_is_a_real_tld(real):
+    """.zip, .mov, .sh and .py are actual TLDs; they must not be filtered out."""
+    assert extract_domains(real)[0] == [real]
+
+
+def test_extract_reports_the_whole_line_it_could_not_use():
+    domains, unusable = extract_domains("good.com\nnot a domain!!\nalso-good.com")
+    assert domains == ["good.com", "also-good.com"]
+    assert [line for line, _ in unusable] == ["not a domain!!"]
+
+
+@pytest.mark.parametrize("line,reason", [
+    ("8.8.8.8", "это IP-адрес, а не домен"),
+    ("user@mail.ru", "это почта — нужен домен без имени ящика"),
+    ("broken,com", "нет точки — на домен не похоже"),
+])
+def test_extract_says_why_a_line_was_unusable(line, reason):
+    assert extract_domains(line)[1] == [(line, reason)]
+
+
+def test_extract_does_not_mistake_an_email_for_its_domain():
+    """Guessing that a mailbox meant its domain is a guess; say so instead."""
+    assert extract_domains("контакт: sales@example.com")[0] == []
+
+
+def test_extract_handles_idn():
+    assert only("пример.рф  — тестовый") == ["xn--e1afmkfd.xn--p1ai"]
+
+
+def test_extract_ignores_blank_lines_silently():
+    assert extract_domains("a.com\n\n   \n\nb.com") == (["a.com", "b.com"], [])
+
+
+def test_extract_does_not_split_a_url_path_into_a_second_domain():
+    """"site.com/a/index.html" is one domain, not "site.com" plus "index.html"."""
+    assert only("https://site.com/a/index.html") == ["site.com"]
