@@ -487,3 +487,152 @@ def test_database_creates_missing_directory(tmp_path):
     db = Database(tmp_path / "nested" / "deeper" / "scanner.db")
     scan_id = db.create_scan(["a.com"])
     assert db.get_scan(scan_id) is not None
+
+
+# ------------------------------------------------------- a scan has to end
+#
+# The failure these cover is not "a scan is slow". It is that a scan which
+# never returns holds one of a handful of runner slots, so every scan
+# submitted afterwards sits in the queue and the whole tool looks hung.
+
+
+@pytest.fixture
+def controlled_scan(monkeypatch):
+    """A scanner stub whose per-domain duration the test decides.
+
+    Domains named ``slow-<n>`` take n seconds; ``wedged`` blocks until the
+    fixture is torn down, standing in for an endpoint that never answers.
+    """
+    release = threading.Event()
+    started: dict[str, float] = {}
+
+    def _scan(raw, config, deadline=None):
+        started[raw] = time.monotonic()
+        if raw.startswith("wedged"):
+            release.wait(30)
+        elif raw.startswith("slow-"):
+            time.sleep(float(raw.split("-")[1].split(".")[0]) / 10)
+        return fake_report(raw)
+
+    monkeypatch.setattr("domain_scanner.web.jobs.scan_domain", _scan)
+    yield started
+    # Let any abandoned worker thread exit, or the interpreter waits for it.
+    release.set()
+
+
+def impatient_app(tmp_path, name, domain_timeout=1.0, scan_timeout=5.0):
+    cfg = Config.from_env(
+        domain_timeout=domain_timeout, scan_timeout=scan_timeout, workers=8
+    )
+    return create_app(db_path=str(tmp_path / name), config=cfg, token="")
+
+
+def test_progress_counts_completed_domains_not_a_prefix(tmp_path, controlled_scan):
+    """done_count must mean "finished", not "finished, in submission order".
+
+    Waiting on futures in the order they were submitted pins the counter to the
+    first domain: five domains can be done and the bar still reads 0/6, which
+    is exactly what a hang looks like from the browser.
+    """
+    # Generous timeouts: this test is about what the counter says while a
+    # domain is still in flight, so nothing may cut that domain short.
+    app = impatient_app(tmp_path, "prog.db", domain_timeout=20.0, scan_timeout=20.0)
+    with TestClient(app) as c:
+        # The blocked one is submitted first, so submission order and
+        # completion order disagree.
+        domains = ["wedged.com"] + [f"fast{i}.com" for i in range(5)]
+        scan_id = c.post("/api/scans", json={"domains": domains}).json()["scan_id"]
+
+        deadline = time.time() + 4
+        seen = 0
+        while time.time() < deadline and seen < 5:
+            scan = c.get(f"/api/scans/{scan_id}").json()["scan"]
+            seen = max(seen, scan["done_count"])
+            time.sleep(0.05)
+
+        assert seen == 5, (
+            f"counter read {seen}/6 while five domains had finished and only "
+            "the blocked one was left"
+        )
+        # And it is still running -- the five did not land because the scan
+        # gave up, they landed as they completed.
+        assert c.get(f"/api/scans/{scan_id}").json()["scan"]["status"] == "running"
+
+
+def test_unresponsive_domain_does_not_hold_the_scan(tmp_path, controlled_scan):
+    app = impatient_app(tmp_path, "wedge.db")
+    with TestClient(app) as c:
+        scan_id = c.post(
+            "/api/scans", json={"domains": ["wedged.com", "ok.com"]}
+        ).json()["scan_id"]
+        body = wait_for(c, scan_id, timeout=10)
+
+        assert body["scan"]["status"] == "done"
+        # Both domains accounted for: the bar reaches the end either way.
+        assert body["scan"]["done_count"] == 2
+        wedged = next(r for r in body["results"] if r["domain"] == "wedged.com")
+        assert wedged["verdict"] == "ERROR"
+        assert "не уложился" in wedged["checks"][0]["error"]
+
+
+def test_a_wedged_scan_does_not_block_the_next_one(tmp_path, controlled_scan, monkeypatch):
+    """The reported symptom: one bad batch and everything after it hangs."""
+    monkeypatch.setenv("SCANNER_MAX_CONCURRENT_SCANS", "1")
+    app = impatient_app(tmp_path, "queue.db")
+    with TestClient(app) as c:
+        first = c.post("/api/scans", json={"domains": ["wedged.com"]}).json()["scan_id"]
+        second = c.post("/api/scans", json={"domains": ["ok.com"]}).json()["scan_id"]
+
+        body = wait_for(c, second, timeout=10)
+        assert body["scan"]["status"] == "done"
+        assert body["results"][0]["domain"] == "ok.com"
+        assert wait_for(c, first, timeout=10)["scan"]["status"] == "done"
+
+
+def test_queued_scan_reports_its_position(tmp_path, controlled_scan, monkeypatch):
+    monkeypatch.setenv("SCANNER_MAX_CONCURRENT_SCANS", "1")
+    app = impatient_app(tmp_path, "pos.db")
+    with TestClient(app) as c:
+        c.post("/api/scans", json={"domains": ["wedged.com"]})
+        waiting = c.post("/api/scans", json={"domains": ["later.com"]}).json()["scan_id"]
+        scan = c.get(f"/api/scans/{waiting}").json()["scan"]
+        assert scan["status"] == "queued"
+        assert scan["queue_position"] == 1
+        assert scan["queue_capacity"] == 1
+
+
+def test_cancel_stops_a_running_scan(tmp_path, controlled_scan):
+    app = impatient_app(tmp_path, "cancel.db")
+    with TestClient(app) as c:
+        scan_id = c.post("/api/scans", json={"domains": ["wedged.com"]}).json()["scan_id"]
+        # Wait until it is actually running, then pull the plug.
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            if c.get(f"/api/scans/{scan_id}").json()["scan"]["status"] == "running":
+                break
+            time.sleep(0.02)
+        c.post(f"/api/scans/{scan_id}/cancel")
+
+        body = wait_for(c, scan_id, timeout=5)
+        assert body["scan"]["status"] == "failed"
+        assert body["scan"]["error"] == "отменено"
+
+
+def test_a_domain_that_raises_is_still_reported(tmp_path, monkeypatch):
+    """A crashed domain used to vanish: N submitted, N-1 results, no reason given."""
+    def _scan(raw, config, deadline=None):
+        if raw == "boom.com":
+            raise RuntimeError("check exploded")
+        return fake_report(raw)
+
+    monkeypatch.setattr("domain_scanner.web.jobs.scan_domain", _scan)
+    app = create_app(db_path=str(tmp_path / "boom.db"), config=Config.from_env(), token="")
+    with TestClient(app) as c:
+        scan_id = c.post(
+            "/api/scans", json={"domains": ["boom.com", "fine.com"]}
+        ).json()["scan_id"]
+        body = wait_for(c, scan_id)
+        assert body["scan"]["done_count"] == 2
+        boom = next(r for r in body["results"] if r["domain"] == "boom.com")
+        assert boom["verdict"] == "ERROR"
+        assert "check exploded" in boom["checks"][0]["error"]

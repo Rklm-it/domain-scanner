@@ -149,8 +149,16 @@ function poll() {
 function renderProgress(scan) {
   const pct = scan.domain_count ? (scan.done_count / scan.domain_count) * 100 : 0;
   $("progress-bar").style.width = `${pct}%`;
-  $("progress-label").textContent =
-    scan.status === "queued" ? "В очереди…" : `Сканирую… ${scan.done_count}/${scan.domain_count}`;
+  if (scan.status === "queued") {
+    // "В очереди" without a position is indistinguishable from a hang.
+    const pos = scan.queue_position || 1;
+    $("progress-label").textContent =
+      pos > 1
+        ? `В очереди — ${pos}-й (одновременно идёт ${scan.queue_capacity || "?"})`
+        : "В очереди — вот-вот стартует";
+  } else {
+    $("progress-label").textContent = `Сканирую… ${scan.done_count}/${scan.domain_count}`;
+  }
   $("progress-detail").textContent = scan.error || "";
 }
 
@@ -204,7 +212,17 @@ function renderResult(report) {
   head.appendChild(el("span", "domain", report.domain));
 
   const scored = findingsOf(report).filter((f) => (f.weight || 0) > 0);
-  head.appendChild(el("span", "top-issue", scored.length ? scored[0].message : "чисто"));
+  // A domain that never got scanned has no findings, which is not the same
+  // thing as having no problems -- never label it "чисто".
+  const errors = (report.checks || [])
+    .filter((c) => c.status === "error" && c.error)
+    .map((c) => c.error);
+  const headline = scored.length
+    ? scored[0].message
+    : errors.length
+    ? errors[0]
+    : "чисто";
+  head.appendChild(el("span", "top-issue", headline));
   wrap.appendChild(head);
 
   const body = el("div", "result-body hidden");
@@ -225,7 +243,9 @@ function renderResult(report) {
   }
 
   if (!scored.length) {
-    body.appendChild(el("div", "muted small", "Значимых находок нет."));
+    body.appendChild(
+      el("div", "muted small", errors.length ? errors.join("; ") : "Значимых находок нет.")
+    );
   }
   scored.forEach((finding) => {
     const row = el("div", "finding");

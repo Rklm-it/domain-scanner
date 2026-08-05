@@ -65,7 +65,10 @@ def reverse_ip_neighbours(ctx: ScanContext, ip: str) -> list[str] | None:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-@register("hosting", order=30, description="ASN / hosting network and IP neighbourhood", transport="dns")
+# Ahead of archive.org and crt.sh: the ASN and prefix this returns are what the
+# cross-domain footprint analysis clusters on, so it has to survive a domain
+# that runs long.
+@register("hosting", order=23, description="ASN / hosting network and IP neighbourhood", transport="dns")
 def check_hosting(ctx: ScanContext) -> CheckResult:
     """Identify who hosts the domain and who else lives on the same IP."""
     result = CheckResult(name="hosting")

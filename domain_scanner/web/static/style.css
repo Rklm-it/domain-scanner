@@ -125,6 +125,8 @@ textarea { width: 100%; resize: vertical; font-family: ui-monospace, "SF Mono", 
 .result.WATCH { border-left-color: var(--watch); }
 .result.RISKY { border-left-color: var(--risky); }
 .result.AVOID { border-left-color: var(--avoid); }
+/* Not a verdict about the domain -- the scan itself did not complete. */
+.result.ERROR { border-left-color: var(--muted); }
 
 .result-head {
   display: flex; align-items: center; gap: 14px; padding: 14px 16px;
@@ -141,6 +143,7 @@ textarea { width: 100%; resize: vertical; font-family: ui-monospace, "SF Mono", 
 .verdict.WATCH { color: var(--watch); }
 .verdict.RISKY { color: var(--risky); }
 .verdict.AVOID { color: var(--avoid); }
+.verdict.ERROR, .verdict.INVALID, .verdict.UNREGISTERED { color: var(--muted); }
 .top-issue { color: var(--muted); font-size: 13px; flex: 1; min-width: 180px; }
 .chev { color: var(--muted); transition: transform .15s; }
 .result.open .chev { transform: rotate(90deg); }

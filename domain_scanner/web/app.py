@@ -124,6 +124,9 @@ def create_app(
     cfg = config or Config.from_env(
         workers=env_int("SCANNER_WORKERS", 8),
         http_timeout=env_float("SCANNER_HTTP_TIMEOUT", 12.0),
+        domain_budget=env_float("SCANNER_DOMAIN_BUDGET", 120.0),
+        domain_timeout=env_float("SCANNER_DOMAIN_TIMEOUT", 240.0),
+        scan_timeout=env_float("SCANNER_SCAN_TIMEOUT", 1800.0),
     )
     # Anything network-facing must refuse internal targets.
     cfg.block_private_targets = True
@@ -143,7 +146,7 @@ def create_app(
         enabled=env_bool("SCANNER_PREFLIGHT", True),
     )
     runner = ScanRunner(
-        db, cfg, env_int("SCANNER_MAX_CONCURRENT_SCANS", 2), monitor=monitor
+        db, cfg, env_int("SCANNER_MAX_CONCURRENT_SCANS", 4), monitor=monitor
     )
 
     @asynccontextmanager
@@ -259,6 +262,9 @@ def create_app(
         scan = db.get_scan(scan_id)
         if scan is None:
             raise HTTPException(404, detail="no such scan")
+        if scan["status"] == "queued":
+            scan["queue_position"] = db.queue_position(scan_id)
+            scan["queue_capacity"] = runner.capacity
         results = db.get_results(scan_id)
         outcomes = db.get_outcomes([r["domain"] for r in results])
         for result in results:

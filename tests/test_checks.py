@@ -792,3 +792,78 @@ def test_hosting_exact_count_is_not_marked_truncated(ctx_factory):
     assert result.data["neighbour_count_truncated"] is False
     msg = next(f.message for f in result.findings if f.code == "hosting.crowded_ip")
     assert "347" in msg and "+" not in msg
+
+
+# ------------------------------------------------- бюджет времени на домен
+
+
+def test_scan_domain_skips_checks_once_the_budget_is_spent(monkeypatch, config):
+    """Checks run one after another, so one stalled endpoint eats the domain.
+
+    When the budget is gone the rest are skipped and reported as skipped, so a
+    slow domain comes back with partial results instead of holding the scan.
+    """
+    import domain_scanner.scanner as scanner
+    from domain_scanner.checks.base import Check
+    from domain_scanner.models import CheckResult
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(scanner.time, "monotonic", lambda: clock["now"])
+
+    def quick(_ctx):
+        return CheckResult(name="quick")
+
+    def slow(_ctx):
+        clock["now"] += 500.0  # burns the whole budget
+        return CheckResult(name="slow")
+
+    monkeypatch.setattr(scanner, "all_checks", lambda: [
+        Check("slow", slow, 1, "", transport="none"),
+        Check("quick", quick, 2, "", transport="none"),
+    ])
+    monkeypatch.setattr(scanner, "make_resolver", lambda *a, **k: None)
+    monkeypatch.setattr(scanner, "make_session", lambda *a, **k: type(
+        "S", (), {"close": lambda self: None})())
+
+    config.domain_budget = 120.0
+    report = scanner.scan_domain("example.com", config)
+
+    ran, skipped = report.check("slow"), report.check("quick")
+    assert ran.status == "ok"
+    assert skipped.status == "skipped"
+    assert skipped.skip_kind == "timeout"
+    # And the gap is visible in the report rather than passed off as coverage.
+    assert report.unavailable_checks == ["quick"]
+
+
+def test_scan_domain_runs_everything_when_there_is_time(monkeypatch, config):
+    import domain_scanner.scanner as scanner
+    from domain_scanner.checks.base import Check
+    from domain_scanner.models import CheckResult
+
+    monkeypatch.setattr(scanner, "all_checks", lambda: [
+        Check(name, lambda _c, n=name: CheckResult(name=n), i, "", transport="none")
+        for i, name in enumerate(("a", "b", "c"))
+    ])
+    monkeypatch.setattr(scanner, "make_resolver", lambda *a, **k: None)
+    monkeypatch.setattr(scanner, "make_session", lambda *a, **k: type(
+        "S", (), {"close": lambda self: None})())
+
+    report = scanner.scan_domain("example.com", config)
+    assert [c.status for c in report.checks] == ["ok", "ok", "ok"]
+    assert report.unavailable_checks == []
+
+
+def test_http_and_hosting_run_before_the_slow_archive_lookups():
+    """Ordering is what makes the budget safe to hit.
+
+    If archive.org and crt.sh went first, a domain that ran long would lose the
+    page fetch — the check that carries most of the verdict.
+    """
+    from domain_scanner.checks import all_checks
+
+    order = [c.name for c in all_checks()]
+    for slow in ("wayback", "crtsh"):
+        assert order.index("http") < order.index(slow)
+        assert order.index("hosting") < order.index(slow)
+    assert order.index("http") < order.index("cloaking")

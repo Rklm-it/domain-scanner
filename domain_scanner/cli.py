@@ -114,6 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="domains scanned in parallel (default: 8)")
     net.add_argument("--timeout", type=float, default=12.0, help="HTTP timeout in seconds")
     net.add_argument("--dns-timeout", type=float, default=6.0, help="DNS timeout in seconds")
+    net.add_argument("--domain-budget", type=float, default=120.0, metavar="SECONDS",
+                     help="time one domain gets for its whole check suite; checks that "
+                          "do not fit are skipped and reported as skipped. 0 disables "
+                          "the budget (default: 120)")
     net.add_argument("--nameserver", action="append", metavar="IP",
                      help="resolver to use for DNS and blocklist queries (repeatable). "
                           "Blocklists refuse queries from public resolvers, so point this "
@@ -155,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         nameservers=args.nameserver,
         proxy=args.proxy,
         workers=args.workers,
+        domain_budget=args.domain_budget,
     )
     known = {c.name for c in all_checks()}
     if args.only:

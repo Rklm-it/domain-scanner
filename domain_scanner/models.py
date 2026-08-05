@@ -53,8 +53,9 @@ class CheckResult:
     error: str | None = None
     duration_ms: int = 0
     # Why a skipped check was skipped: "config" (an optional API key is not
-    # set -- expected) or "transport" (this machine could not reach it -- a
-    # genuine gap in coverage).
+    # set -- expected), "transport" (this machine could not reach it) or
+    # "timeout" (the domain ran out of its time budget first). Only "config"
+    # is a deliberate opt-out; the others are genuine gaps in coverage.
     skip_kind: str | None = None
 
     def add(
@@ -141,10 +142,16 @@ class DomainReport:
 
     @property
     def unavailable_checks(self) -> list[str]:
-        """Checks that produced no data: failed, or skipped for lack of a transport."""
+        """Checks that produced no data.
+
+        Failed checks, and checks skipped for any reason other than the user
+        opting out of them ("config"): no transport to reach them, or no time
+        left in the domain's budget.
+        """
         return [
             c.name for c in self.checks
-            if c.status == "error" or (c.status == "skipped" and c.skip_kind == "transport")
+            if c.status == "error"
+            or (c.status == "skipped" and c.skip_kind != "config")
         ]
 
     def to_dict(self) -> dict[str, Any]:

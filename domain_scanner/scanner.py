@@ -13,9 +13,17 @@ from .scoring import score_report
 from .utils import DomainParseError, make_resolver, make_session, parse_domain
 
 
-def scan_domain(raw: str, config: Config) -> DomainReport:
-    """Run the full check suite against one domain."""
+def scan_domain(raw: str, config: Config, deadline: float | None = None) -> DomainReport:
+    """Run the full check suite against one domain.
+
+    ``deadline`` is a ``time.monotonic()`` value past which no further check is
+    started; it defaults to ``config.domain_budget`` seconds from now. Checks
+    are ordered cheapest- and most-decisive-first, so what gets dropped when a
+    domain runs long is the supporting detail, never the verdict.
+    """
     started = time.monotonic()
+    if deadline is None:
+        deadline = started + config.domain_budget if config.domain_budget > 0 else None
     try:
         domain, sld, suffix = parse_domain(raw)
     except DomainParseError as exc:
@@ -39,6 +47,15 @@ def scan_domain(raw: str, config: Config) -> DomainReport:
     try:
         for check in all_checks():
             if not config.is_enabled(check.name):
+                continue
+            if deadline is not None and time.monotonic() >= deadline:
+                out_of_time = CheckResult(name=check.name)
+                out_of_time.skip(
+                    f"домен исчерпал отведённые ему {config.domain_budget:.0f} с "
+                    "— проверка не запускалась",
+                    kind="timeout",
+                )
+                report.checks.append(out_of_time)
                 continue
             report.checks.append(run_check(check, ctx))
     finally:

@@ -177,7 +177,11 @@ def detect_trackers(html: str) -> dict[str, list[str]]:
     return out
 
 
-@register("http", order=40, description="Live page: reachability, redirects, trust pages, cloaking")
+# Ordered early on purpose. What the page actually serves carries most of the
+# verdict, and the checks that used to run before it (archive.org, crt.sh,
+# reverse-IP) are the slow ones. When a domain runs out of its time budget the
+# thing that must already be done is this.
+@register("http", order=18, description="Live page: reachability, redirects, trust pages, cloaking")
 def check_http(ctx: ScanContext) -> CheckResult:
     """Fetch the landing page the way a user and the way Google would."""
     result = CheckResult(name="http")
@@ -319,7 +323,7 @@ def check_http(ctx: ScanContext) -> CheckResult:
     return result
 
 
-@register("cloaking", order=45,
+@register("cloaking", order=21,
           description="Does the page serve Google something different from a user?")
 def check_cloaking(ctx: ScanContext) -> CheckResult:
     """Compare the page as served to a browser, to Googlebot and to AdsBot.

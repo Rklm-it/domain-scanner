@@ -160,6 +160,24 @@ class Database:
         conn.execute("UPDATE scans SET done_count = done_count + 1 WHERE id = ?", (scan_id,))
         conn.commit()
 
+    def queue_position(self, scan_id: str) -> int:
+        """How many scans are waiting ahead of this one, plus itself.
+
+        A queued scan otherwise looks identical to a hung one from the UI, and
+        the difference matters: one needs patience, the other needs a look at
+        the logs.
+        """
+        row = self.query_one(
+            "SELECT COUNT(*) AS n FROM scans WHERE status = 'queued' AND created_at < "
+            "(SELECT created_at FROM scans WHERE id = ?)",
+            (scan_id,),
+        )
+        return (row["n"] if row else 0) + 1
+
+    def running_count(self) -> int:
+        row = self.query_one("SELECT COUNT(*) AS n FROM scans WHERE status = 'running'")
+        return row["n"] if row else 0
+
     def get_scan(self, scan_id: str) -> dict | None:
         row = self.query_one("SELECT * FROM scans WHERE id = ?", (scan_id,))
         if row is None:

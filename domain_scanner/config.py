@@ -121,6 +121,22 @@ class Config:
     workers: int = 8
     max_redirects: int = 10
 
+    # --- deadlines ---
+    # Checks run one after another inside a domain, and every one of them talks
+    # to a different third party. Without a budget the domain takes as long as
+    # the slowest of them is willing to stall: a single unresponsive endpoint
+    # (crt.sh under load, a redirect chain that never terminates) holds the
+    # whole domain, and with it the scan and the worker slot behind it.
+    # When the budget runs out the remaining checks are skipped and reported as
+    # such, so a slow domain returns partial results instead of nothing.
+    domain_budget: float = 120.0
+    # Hard ceiling enforced from outside, for the case where one check blocks
+    # past the budget it was supposed to respect (the budget is only checked
+    # between checks -- it cannot interrupt a socket read).
+    domain_timeout: float = 240.0
+    # Absolute cap on a whole batch, whatever its size.
+    scan_timeout: float = 1800.0
+
     # --- thresholds ---
     fresh_domain_days: int = 30
     young_domain_days: int = 90
